@@ -1,0 +1,121 @@
+@model Btcb2WalletViewModel
+@{
+    ViewData.SetLayoutModel(new LayoutModel(UIBitcoinBlake2bStoreController.MenuItemId, $"{Model.DisplayName} wallet"));
+    var storeId = Context.GetRouteValue("storeId");
+    var expectedKeys = Model.Chain == Btcb2Chain.Mainnet ? "zpub, ypub or xpub" : "vpub, upub or tpub";
+}
+
+<div class="sticky-header">
+    <h2 class="my-1">@ViewData["Title"]</h2>
+</div>
+<partial name="_StatusMessage" />
+
+<p class="text-secondary">
+    Accept @Model.DisplayName (@Btcb2.ChainName, @Model.Chain) with a watch-only wallet.
+    BTCPay derives a new receive address for every invoice. It never holds your spending keys.
+</p>
+
+<div class="alert alert-warning" role="alert">
+    <strong>Use a wallet dedicated to @Model.DisplayName.</strong>
+    @Model.DisplayName addresses look exactly like Bitcoin addresses, and the same keys control coins on both chains.
+    Never use the wallet that holds your BTC.
+</div>
+
+@if (Model.Configured)
+{
+    @if (Model.ChainMismatch)
+    {
+        <div class="alert alert-danger" role="alert">
+            This wallet was set up for a different chain than this server follows (@Model.Chain). @Model.DisplayName is unavailable at checkout until you replace it.
+        </div>
+    }
+    <div class="row">
+        <div class="col-xl-8">
+            <h3 class="mb-3">Current wallet</h3>
+            <div class="form-group">
+                <label class="form-label">Account public key or descriptor</label>
+                <vc:truncate-center text="@Model.AccountOriginal" padding="20" classes="form-control-plaintext" copy="true" />
+            </div>
+            @if (Model.Addresses.Length > 0)
+            {
+                <div class="form-group">
+                    <label class="form-label">First receive addresses</label>
+                    <ol start="0" class="font-monospace small mb-1" data-testid="BitcoinBlake2b-Addresses">
+                        @foreach (var address in Model.Addresses)
+                        {
+                            <li>@address</li>
+                        }
+                    </ol>
+                    <div class="form-text">
+                        The next invoice uses address #@Model.NextIndex. Set your wallet's gap limit well above the number of unpaid invoices you expect, or it may not show payments to later addresses.
+                    </div>
+                </div>
+            }
+
+            <form method="post" asp-action="UpdateSettings" asp-route-storeId="@storeId" class="mt-4">
+                <div class="d-flex align-items-center mb-3">
+                    <input type="checkbox" class="btcpay-toggle me-3" id="enabled" name="enabled" value="true" checked="@Model.Enabled" />
+                    <label class="form-check-label" for="enabled">Accept @Model.DisplayName at checkout</label>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="confirmationsRequired">Confirmations before an invoice is settled</label>
+                    <input type="number" class="form-control w-auto" id="confirmationsRequired" name="confirmationsRequired" min="0" max="100"
+                           value="@Model.ConfirmationsRequired" placeholder="@Model.SpeedPolicyConfirmations" />
+                    <div class="form-text">
+                        Leave empty to follow the store's speed policy (currently @Model.SpeedPolicyConfirmations).
+                        @Model.DisplayName is a young chain whose hashrate can be rented, so more confirmations are safer for large amounts.
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-primary" id="SaveSettings">Save</button>
+            </form>
+
+            <h3 class="mt-5 mb-3">Replace or remove wallet</h3>
+            <p class="text-secondary">Existing invoices keep using the addresses they were given.</p>
+            <form method="post" asp-action="Remove" asp-route-storeId="@storeId" class="d-inline">
+                <button type="submit" class="btn btn-outline-danger" id="RemoveWallet">Remove wallet</button>
+            </form>
+        </div>
+    </div>
+}
+
+<div class="row mt-4">
+    <div class="col-xl-8">
+        <h3 class="mb-3">@(Model.Configured ? "Use a different wallet" : "Set up your wallet")</h3>
+        <form method="post" asp-action="Preview" asp-route-storeId="@storeId">
+            <div class="form-group">
+                <label asp-for="WalletKey" class="form-label">Account public key or output descriptor</label>
+                <textarea asp-for="WalletKey" class="form-control font-monospace" rows="3" placeholder="@expectedKeys…" autocomplete="off" spellcheck="false"></textarea>
+                <span asp-validation-for="WalletKey" class="text-danger"></span>
+                <div class="form-text">
+                    From an @Model.DisplayName-capable wallet such as the Sparrow BLAKE2b build. A @expectedKeys gives native SegWit, nested SegWit or legacy addresses respectively. Never paste a private key.
+                </div>
+            </div>
+            <button type="submit" class="btn btn-secondary" id="PreviewWallet">Preview addresses</button>
+        </form>
+
+        @if (Model.PreviewAddresses is { Length: > 0 })
+        {
+            <form method="post" asp-action="Save" asp-route-storeId="@storeId" class="mt-4">
+                <input type="hidden" asp-for="WalletKey" />
+                <label class="form-label">Compare these with the first receive addresses in your wallet</label>
+                <ol start="0" class="font-monospace small" data-testid="BitcoinBlake2b-PreviewAddresses">
+                    @foreach (var address in Model.PreviewAddresses)
+                    {
+                        <li>@address</li>
+                    }
+                </ol>
+                <div class="form-check mb-2">
+                    <input asp-for="ConfirmAddressesMatch" type="checkbox" class="form-check-input" />
+                    <label asp-for="ConfirmAddressesMatch" class="form-check-label">These addresses match my wallet's receive addresses.</label>
+                    <span asp-validation-for="ConfirmAddressesMatch" class="text-danger d-block"></span>
+                </div>
+                <div class="form-check mb-3">
+                    <input asp-for="ConfirmDedicatedWallet" type="checkbox" class="form-check-input" />
+                    <label asp-for="ConfirmDedicatedWallet" class="form-check-label">This wallet is used only for @Model.DisplayName, never for BTC.</label>
+                    <span asp-validation-for="ConfirmDedicatedWallet" class="text-danger d-block"></span>
+                </div>
+                <button type="submit" class="btn btn-primary" id="SaveWallet">Save wallet</button>
+            </form>
+        }
+    </div>
+</div>

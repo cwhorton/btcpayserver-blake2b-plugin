@@ -1,6 +1,20 @@
-<li class="nav-item nav-item-sub">
-    <a layout-menu-item="@Plugin.Area"
-       asp-area="@Plugin.Area"
-       asp-controller="UIBitcoinBlake2b"
-       asp-action="Index">Bitcoin BLAKE2b (XBT)</a>
-</li>
+@inject Btcb2Network Network
+@{
+    var store = Context.GetStoreData();
+}
+@if (store is not null)
+{
+    var configured = store.GetPaymentMethodConfig(Network.PaymentMethodId) is not null;
+    var enabled = configured && !store.GetStoreBlob().IsExcluded(Network.PaymentMethodId);
+    <li class="nav-item" permission="@Policies.CanModifyStoreSettings">
+        <a layout-menu-item="@UIBitcoinBlake2bStoreController.MenuItemId"
+           asp-area="@Plugin.Area"
+           asp-controller="UIBitcoinBlake2bStore"
+           asp-action="Settings"
+           asp-route-storeId="@store.Id"
+           data-testid="BitcoinBlake2b-Wallet">
+            <span class="me-2 btcpay-status btcpay-status--@(enabled ? "enabled" : "pending")"></span>
+            <span>@Network.DisplayName</span>
+        </a>
+    </li>
+}

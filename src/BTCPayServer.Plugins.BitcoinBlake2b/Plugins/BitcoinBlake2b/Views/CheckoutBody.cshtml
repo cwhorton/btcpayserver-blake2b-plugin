@@ -1,0 +1,35 @@
+@inject Btcb2Network Network
+@*
+    XBT's own checkout component, modelled on BTCPay's on-chain one but independent of it, so
+    nothing here can affect Bitcoin's checkout. Registered at "checkout-end".
+*@
+<template id="@Btcb2CheckoutModelExtension.CheckoutBodyComponentName">
+    <div class="payment-box">
+        <div v-if="model.invoiceBitcoinUrlQR" class="qr-container clipboard-button" :data-qr-value="model.invoiceBitcoinUrlQR" :data-clipboard="model.address" data-clipboard-confirm-element="#Address_@Network.PaymentMethodId [data-clipboard]">
+            <div>
+                <qrcode :value="model.invoiceBitcoinUrlQR" tag="div" :options="qrOptions"></qrcode>
+            </div>
+            <img class="qr-icon" :src="model.cryptoImage" :alt="model.paymentMethodName" />
+        </div>
+        <div v-if="model.address" class="input-group mt-3">
+            <div class="form-floating" id="Address_@Network.PaymentMethodId">
+                <vc:truncate-center text="model.address" is-vue="true" padding="15" elastic="true" classes="form-control-plaintext" />
+                <label v-t="{ path: 'address', args: { paymentMethod: model.paymentMethodName }}"></label>
+            </div>
+        </div>
+        <div class="alert alert-warning small text-start mt-3 mb-0" role="alert" data-testid="BitcoinBlake2b-CheckoutWarning">
+            Send only <strong>@Network.DisplayName</strong> (@Btcb2.ChainName) to this address. BTC sent here will not pay this invoice.
+            Use a wallet that supports @Network.DisplayName replay protection.
+        </div>
+    </div>
+</template>
+
+<script>
+    Vue.component(@Safe.Json(Btcb2CheckoutModelExtension.CheckoutBodyComponentName), {
+        props: ['model'],
+        template: @Safe.Json("#" + Btcb2CheckoutModelExtension.CheckoutBodyComponentName),
+        components: {
+            qrcode: VueQrcode
+        }
+    });
+</script>
