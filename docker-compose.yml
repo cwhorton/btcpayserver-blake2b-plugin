@@ -1,0 +1,109 @@
+# Containerized development environment: nothing is installed on the host.
+# Use ./dev.sh rather than calling this file directly.
+#
+#   sdk       .NET SDK for builds and tests (run on demand)
+#   btcpay    BTCPay Server from submodules/btcpayserver, with this plugin loaded
+#   postgres, bitcoind, nbxplorer   BTCPay's regtest dependencies
+
+name: btcpay-blake2b-dev
+
+x-sdk: &sdk
+  image: mcr.microsoft.com/dotnet/sdk:10.0
+  working_dir: /src
+  volumes:
+    - .:/src
+    - nuget:/root/.nuget/packages
+  environment:
+    DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+    DOTNET_NOLOGO: "1"
+    DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "1"
+    NUGET_PACKAGES: /root/.nuget/packages
+
+services:
+  sdk:
+    <<: *sdk
+    profiles: ["tools"]
+
+  btcpay:
+    <<: *sdk
+    restart: unless-stopped
+    working_dir: /src/submodules/btcpayserver/BTCPayServer
+    command: ["dotnet", "run", "--no-launch-profile", "-c", "Debug"]
+    ports:
+      - "127.0.0.1:14142:14142"
+    environment:
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      DOTNET_NOLOGO: "1"
+      NUGET_PACKAGES: /root/.nuget/packages
+      ASPNETCORE_ENVIRONMENT: Development
+      BTCPAY_NETWORK: regtest
+      BTCPAY_BIND: 0.0.0.0:14142
+      BTCPAY_DATADIR: /datadir
+      BTCPAY_CHAINS: btc
+      BTCPAY_BTCEXPLORERURL: http://nbxplorer:32838/
+      BTCPAY_POSTGRES: User ID=postgres;Include Error Detail=true;Host=postgres;Port=5432;Database=btcpayserver
+      BTCPAY_EXPLORERPOSTGRES: User ID=postgres;Include Error Detail=true;Host=postgres;Port=5432;Database=nbxplorer
+      BTCPAY_ALLOW-ADMIN-REGISTRATION: "true"
+      BTCPAY_DISABLE-REGISTRATION: "false"
+      BTCPAY_CHEATMODE: "true"
+      BTCPAY_UPDATEURL: ""
+      BTCPAY_RECOMMENDED-PLUGINS: ""
+      BTCPAY_VERBOSE: "true"
+    volumes:
+      - .:/src
+      - nuget:/root/.nuget/packages
+      - btcpay_datadir:/datadir
+    depends_on:
+      - postgres
+      - nbxplorer
+
+  postgres:
+    image: postgres:18.1
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: trust
+    command: ["-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off"]
+    volumes:
+      - postgres_datadir:/var/lib/postgresql
+
+  bitcoind:
+    image: btcpayserver/bitcoin:31.1-1
+    restart: unless-stopped
+    environment:
+      BITCOIN_NETWORK: regtest
+      BITCOIN_WALLETDIR: "/data/wallets"
+      BITCOIN_EXTRA_ARGS: |-
+        rpcuser=ceiwHEbqWI83
+        rpcpassword=DwubwWsoo3
+        rpcport=43782
+        rpcbind=0.0.0.0:43782
+        rpcallowip=0.0.0.0/0
+        port=39388
+        whitelist=0.0.0.0/0
+        fallbackfee=0.0002
+        minrelaytxfee=0.00001000
+    volumes:
+      - bitcoin_datadir:/data
+
+  nbxplorer:
+    image: nicolasdorier/nbxplorer:2.6.18
+    restart: unless-stopped
+    environment:
+      NBXPLORER_NETWORK: regtest
+      NBXPLORER_CHAINS: "btc"
+      NBXPLORER_BTCRPCURL: http://bitcoind:43782/
+      NBXPLORER_BTCNODEENDPOINT: bitcoind:39388
+      NBXPLORER_BTCRPCUSER: ceiwHEbqWI83
+      NBXPLORER_BTCRPCPASSWORD: DwubwWsoo3
+      NBXPLORER_BIND: 0.0.0.0:32838
+      NBXPLORER_POSTGRES: User ID=postgres;Include Error Detail=true;Host=postgres;Port=5432;Database=nbxplorer
+      NBXPLORER_NOAUTH: 1
+    depends_on:
+      - bitcoind
+      - postgres
+
+volumes:
+  nuget:
+  btcpay_datadir:
+  postgres_datadir:
+  bitcoin_datadir:
