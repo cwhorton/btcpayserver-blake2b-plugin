@@ -18,6 +18,9 @@ public enum Btcb2Chain
 /// <see cref="BTCPayNetwork"/>: NBXplorer cannot follow this chain, so none of BTCPay's
 /// built-in Bitcoin wallet code must ever pick it up.
 /// </summary>
+/// <summary>A post-fork block: its hash (as explorers report it) and its raw 164-byte header (as Electrum servers do).</summary>
+public record ChainCheckpoint(long Height, string BlockHash, string HeaderHex);
+
 public class Btcb2Network : BTCPayNetworkBase
 {
     public Btcb2Network(Btcb2Chain chain)
@@ -59,9 +62,11 @@ public class Btcb2Network : BTCPayNetworkBase
     /// A block after the fork. A chain data source must report this hash at this height,
     /// which proves it follows Bitcoin BLAKE2b and not Bitcoin.
     /// </summary>
-    public (long Height, string Hash) Checkpoint => Chain == Btcb2Chain.Mainnet
-        ? (961_640, "0000000000000050c1e5f69672f459293be14f46e5a494e7a8c8541396f18eeb")
-        : (150_308, "000000000000b9d1b7e1bb0e77215ee92c6ef7ec8f4473e23908380649e779b6");
+    public ChainCheckpoint Checkpoint => Chain == Btcb2Chain.Mainnet
+        ? new(961_640, "0000000000000050c1e5f69672f459293be14f46e5a494e7a8c8541396f18eeb",
+            "000000a0657e02138733654183a2c7320d85ca9d743fe139c4bb01000000000000000000c137a8515a0f6b3aaf6049cc7611787c022ad523d51094be0a0363d0dc0bc7684dca936a4f8d001a5671798c84daeb494dca936a00000000b1ccf00d0300000000000000000000001e0300000000000000000000000000000000000068ac0e000000000000000000000000000000000000000000000000000000000000000000")
+        : new(150_308, "000000000000b9d1b7e1bb0e77215ee92c6ef7ec8f4473e23908380649e779b6",
+            "000000a0ccb157caa788400a667f6c19858ee913c701a42c8d1cd85122ec17000000000043d2e57990429ae581621ce01aa5fbf5e4c2723996be18660a4930b91e96d6c871b4946affff001dce0ac801d123881f71b4946a00000000b10cf00d0100000000000000000000008e00000000000000000000000000000000000000244b02000000000000000000000000000000000000000000000000000000000000000000");
 
     /// <summary>Independently operated public explorers with an Esplora-style API.</summary>
     public string[] PublicEsploraUrls => Chain == Btcb2Chain.Mainnet

@@ -15,8 +15,11 @@ public interface IChainSource
     string Name { get; }
     string Url { get; }
     Task<long> GetTipHeightAsync(CancellationToken cancellationToken);
-    /// <summary>Null if the source has no block at this height.</summary>
-    Task<string?> GetBlockHashAsync(long height, CancellationToken cancellationToken);
+    /// <summary>
+    /// Null if the source reports the checkpoint block, proving it follows Bitcoin BLAKE2b;
+    /// otherwise what it reported instead.
+    /// </summary>
+    Task<string?> CheckCheckpointAsync(ChainCheckpoint checkpoint, CancellationToken cancellationToken);
     /// <summary>Confirmed plus unconfirmed transactions involving the address.</summary>
     Task<int> GetTransactionCountAsync(string address, CancellationToken cancellationToken);
     /// <summary>Every output paying to the address, confirmed or not.</summary>

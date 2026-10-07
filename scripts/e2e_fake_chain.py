@@ -84,12 +84,14 @@ def stays(description, check, seconds=8):
 
 
 def test_agreement_and_settlement():
-    print("Payment needs 2 of 3 explorers, then settles after 3 confirmations")
+    print("Payment needs 2 of 3 sources, then settles after 3 confirmations")
     inv, address, sats = new_invoice()
-    txid = chain("pay", address, sats, "a")
-    stays("a payment seen by only one explorer is ignored", lambda: payments(inv) == [])
-    chain("pay", address, sats, "b", txid)
-    wait("payment recorded once two explorers agree", lambda: payments(inv) == [(f"{txid}-1", "Processing")])
+    nonce = os.urandom(8).hex()
+    txid = chain("pay", address, sats, "a", nonce)
+    stays("a payment seen by only one source is ignored", lambda: payments(inv) == [])
+    assert chain("pay", address, sats, "c", nonce) == txid
+    # a is an explorer and c an Electrum server: the two kinds of source must agree with each other.
+    wait("payment recorded once an explorer and an Electrum server agree", lambda: payments(inv) == [(f"{txid}-1", "Processing")])
     wait("invoice is processing", lambda: status(inv)[0] == "Processing")
     chain("mine", 2)
     stays("2 confirmations: still processing", lambda: status(inv)[0] == "Processing", 6)
@@ -123,7 +125,7 @@ def test_vanishing_payment():
 
 
 def test_outage():
-    print("Too few explorers reachable")
+    print("Too few chain sources reachable")
     chain("fail", "on", "a,b")
     try:
         time.sleep(6)
@@ -134,12 +136,12 @@ def test_outage():
             # XBT is this store's only payment method, so BTCPay refuses the invoice outright.
             message = e.read().decode()
             assert e.code == 400 and "Not enough XBT chain data sources are reachable" in message, message
-        print("  ok: no XBT address handed out while only 1 of 3 explorers answers")
+        print("  ok: no XBT address handed out while only 1 of 3 sources answers")
     finally:
         chain("fail", "off", "a,b")
     time.sleep(6)
     new_invoice()
-    print("  ok: XBT offered again once explorers are back")
+    print("  ok: XBT offered again once sources are back")
 
 
 if __name__ == "__main__":

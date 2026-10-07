@@ -106,12 +106,14 @@ services:
       - bitcoind
       - postgres
 
-  # Fake XBT explorers for local tests (./dev.sh fake-chain). Same testnet4 checkpoint as the real chain.
+  # Fake XBT chains for local tests (./dev.sh fake-chain), each serving an explorer API on 3002 and
+  # Electrum on 50001. Same testnet4 checkpoint as the real chain.
   fake-esplora-a: &fake-esplora
     image: python:3.13-alpine
     profiles: ["fake-chain"]
     command: ["python", "/app/fake_esplora.py", "--port", "3002", "--checkpoint-height", "150308",
-              "--checkpoint-hash", "000000000000b9d1b7e1bb0e77215ee92c6ef7ec8f4473e23908380649e779b6"]
+              "--checkpoint-hash", "000000000000b9d1b7e1bb0e77215ee92c6ef7ec8f4473e23908380649e779b6",
+              "--checkpoint-header", "000000a0ccb157caa788400a667f6c19858ee913c701a42c8d1cd85122ec17000000000043d2e57990429ae581621ce01aa5fbf5e4c2723996be18660a4930b91e96d6c871b4946affff001dce0ac801d123881f71b4946a00000000b10cf00d0100000000000000000000008e00000000000000000000000000000000000000244b02000000000000000000000000000000000000000000000000000000000000000000"]
     volumes:
       - ./scripts/fake-esplora:/app:ro
     ports:

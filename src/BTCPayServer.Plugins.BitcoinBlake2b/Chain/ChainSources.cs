@@ -11,7 +11,8 @@ public record ChainSourceSet(IReadOnlyList<IChainSource> Sources, int RequiredAg
 
 /// <summary>
 /// Decides which chain data sources are used. Public explorers are the default; an operator
-/// can point BTCPay at other explorers with BTCPAY_BTCB2_ESPLORA (comma-separated URLs) and
+/// can point BTCPay at other sources with BTCPAY_BTCB2_ESPLORA (comma-separated: explorer API
+/// URLs, or Electrum servers as host:port:s, ssl://host:port or tcp://host:port) and
 /// BTCPAY_BTCB2_REQUIRED_AGREEMENT.
 /// </summary>
 public class ChainSources
@@ -33,13 +34,14 @@ public class ChainSources
 
     public ChainSourceSet Current => _current;
 
-    public ChainSourceSet Build(IEnumerable<string> esploraUrls, int requiredAgreement, string description)
+    /// <exception cref="FormatException">If a source address is invalid.</exception>
+    public ChainSourceSet Build(IEnumerable<string> urls, int requiredAgreement, string description)
     {
-        var sources = esploraUrls
+        var sources = urls
             .Select(u => u.Trim().TrimEnd('/'))
             .Where(u => u.Length > 0)
             .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Select(u => (IChainSource)new EsploraChainSource(_httpClientFactory, u))
+            .Select(CreateSource)
             .ToArray();
         if (sources.Length == 0)
             throw new ArgumentException("At least one chain data source is required");
@@ -48,7 +50,17 @@ public class ChainSources
         return new ChainSourceSet(sources, requiredAgreement, description);
     }
 
-    public void Set(ChainSourceSet set) => _current = set;
+    public IChainSource CreateSource(string url) => ElectrumEndpoint.LooksLikeElectrum(url)
+        ? new ElectrumChainSource(new ElectrumClient(ElectrumEndpoint.Parse(url)), _network)
+        : new EsploraChainSource(_httpClientFactory, url);
+
+    public void Set(ChainSourceSet set)
+    {
+        var previous = _current;
+        _current = set;
+        foreach (var source in previous.Sources.Except(set.Sources).OfType<IDisposable>())
+            source.Dispose();
+    }
 
     public static string[] ParseUrls(string? urls) =>
         (urls ?? "").Split([',', ' ', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);

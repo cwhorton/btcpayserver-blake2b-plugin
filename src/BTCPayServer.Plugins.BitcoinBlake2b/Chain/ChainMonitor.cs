@@ -62,13 +62,12 @@ public class ChainMonitor(ChainSources sources, Btcb2Network network, ILogger<Ch
         {
             if (state.OnChain != true || state.CheckpointCheckedAt < now - CheckpointRecheck)
             {
-                var (height, hash) = network.Checkpoint;
-                var actual = await state.Source.GetBlockHashAsync(height, cancellationToken);
-                state.OnChain = string.Equals(actual, hash, StringComparison.OrdinalIgnoreCase);
+                var mismatch = await state.Source.CheckCheckpointAsync(network.Checkpoint, cancellationToken);
+                state.OnChain = mismatch is null;
                 state.CheckpointCheckedAt = now;
-                if (state.OnChain != true)
+                if (mismatch is not null)
                 {
-                    state.Error = $"Not on the {Btcb2.ChainName} {network.Chain} chain (block {height} is {actual ?? "missing"}, expected {hash})";
+                    state.Error = $"Not on the {Btcb2.ChainName} {network.Chain} chain ({mismatch}, expected {network.Checkpoint.BlockHash})";
                     logger.LogWarning("XBT chain source {Source}: {Error}", state.Source.Url, state.Error);
                     return;
                 }

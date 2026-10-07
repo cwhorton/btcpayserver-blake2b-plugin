@@ -37,8 +37,11 @@ public class EsploraChainSource : IChainSource
     public async Task<long> GetTipHeightAsync(CancellationToken cancellationToken)
         => long.Parse((await GetStringAsync("/blocks/tip/height", cancellationToken))!.Trim(), CultureInfo.InvariantCulture);
 
-    public async Task<string?> GetBlockHashAsync(long height, CancellationToken cancellationToken)
-        => (await GetStringAsync($"/block-height/{height}", cancellationToken, allowNotFound: true))?.Trim();
+    public async Task<string?> CheckCheckpointAsync(ChainCheckpoint checkpoint, CancellationToken cancellationToken)
+    {
+        var hash = (await GetStringAsync($"/block-height/{checkpoint.Height}", cancellationToken, allowNotFound: true))?.Trim();
+        return string.Equals(hash, checkpoint.BlockHash, StringComparison.OrdinalIgnoreCase) ? null : $"block {checkpoint.Height} is {hash ?? "missing"}";
+    }
 
     public async Task<int> GetTransactionCountAsync(string address, CancellationToken cancellationToken)
         => ParseTransactionCount(JObject.Parse((await GetStringAsync($"/address/{address}", cancellationToken))!));

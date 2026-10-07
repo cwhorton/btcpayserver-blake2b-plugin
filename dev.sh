@@ -8,7 +8,8 @@
 #   ./dev.sh logs         Follow BTCPay's logs
 #   ./dev.sh down         Stop everything (data is kept)
 #   ./dev.sh reset        Stop everything and delete all dev data
-#   ./dev.sh fake-chain   Restart BTCPay against 3 fake explorers (2 must agree); drive them
+#   ./dev.sh fake-chain   Restart BTCPay against 3 fake chain sources (explorers a and b, Electrum
+#                         server c; 2 must agree); drive them
 #                         with scripts/fake-chain.sh
 #   ./dev.sh real-chain   Restart BTCPay against the real public explorers
 #   ./dev.sh sdk <cmd>    Run any command in the SDK container
@@ -47,7 +48,7 @@ case "${1:-}" in
     ;;
   fake-chain)
     build_plugin
-    export BTCB2_ESPLORA="http://fake-esplora-a:3002/api,http://fake-esplora-b:3002/api,http://fake-esplora-c:3002/api"
+    export BTCB2_ESPLORA="http://fake-esplora-a:3002/api,http://fake-esplora-b:3002/api,tcp://fake-esplora-c:50001"
     export BTCB2_REQUIRED_AGREEMENT=2 BTCB2_POLL_SECONDS=2
     docker compose --profile fake-chain up -d --force-recreate fake-esplora-a fake-esplora-b fake-esplora-c btcpay
     ;;

@@ -39,7 +39,7 @@ BTCPay Server is pinned as a git submodule in `submodules/btcpayserver`. A mainn
 
 ### Testing payment detection without real coins
 
-`./dev.sh fake-chain` points BTCPay at three fake explorers, of which two must agree, polling every 2 seconds. Drive them with `scripts/fake-chain.sh` (`pay`, `mine`, `reorg`, `drop`, `fail`), or run the end-to-end scenarios:
+`./dev.sh fake-chain` points BTCPay at three fake chain sources (two explorers and an Electrum server), of which two must agree, polling every 2 seconds. Drive them with `scripts/fake-chain.sh` (`pay`, `mine`, `reorg`, `drop`, `fail`), or run the end-to-end scenarios:
 
 ```bash
 ./dev.sh fake-chain

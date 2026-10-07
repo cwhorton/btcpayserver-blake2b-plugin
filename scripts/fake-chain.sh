@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Drives the fake XBT explorers started by ./dev.sh fake-chain (a, b, c on ports 3010-3012).
 #
-#   scripts/fake-chain.sh pay <address> <sats> [explorers] [txid]   Broadcast a payment (default: a,b,c)
+#   scripts/fake-chain.sh pay <address> <sats> [explorers] [nonce]  Broadcast a payment (default: a,b,c);
+#                         the same address, amount and nonce make the same transaction
 #   scripts/fake-chain.sh mine [blocks] [explorers]          Mine blocks
 #   scripts/fake-chain.sh reorg [depth] [explorers]          Undo the top blocks
 #   scripts/fake-chain.sh drop <txid> [explorers]            Make a transaction vanish
@@ -12,8 +13,11 @@ port() { case "$1" in a) echo 3010;; b) echo 3011;; c) echo 3012;; *) echo "unkn
 each() { local list="$1" path="$2" body="$3"; for e in ${list//,/ }; do curl -sf -X POST "http://127.0.0.1:$(port "$e")$path" -H 'Content-Type: application/json' -d "$body" > /dev/null; done; }
 case "${1:-}" in
   pay)
-    txid=${5:-$(openssl rand -hex 32)}
-    each "${4:-a,b,c}" /dev/pay "{\"address\":\"$2\",\"sats\":$3,\"txid\":\"$txid\"}"
+    nonce=${5:-$(openssl rand -hex 8)}
+    body="{\"address\":\"$2\",\"sats\":$3,\"nonce\":\"$nonce\"}"
+    for e in $(echo "${4:-a,b,c}" | tr ',' ' '); do
+      txid=$(curl -sf -X POST "http://127.0.0.1:$(port "$e")/dev/pay" -H 'Content-Type: application/json' -d "$body" | python3 -c 'import sys,json; print(json.load(sys.stdin)["txid"])')
+    done
     echo "$txid"
     ;;
   mine) each "${3:-a,b,c}" /dev/mine "{\"blocks\":${2:-1}}" ;;
