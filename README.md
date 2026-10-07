@@ -33,4 +33,16 @@ git clone --recurse-submodules <this repository>
 ./dev.sh down      # stop everything
 ```
 
-BTCPay Server is pinned as a git submodule in `submodules/btcpayserver`.
+BTCPay Server is pinned as a git submodule in `submodules/btcpayserver`. A mainnet BTCPay follows XBT mainnet; a testnet or regtest BTCPay (like this dev setup) follows XBT testnet4. `BTCPAY_BTCB2_CHAIN` overrides this.
+
+`./scripts/dev-seed.sh` creates a local admin, an API key and a store (credentials go to the gitignored `.dev.env`).
+
+### Testing payment detection without real coins
+
+`./dev.sh fake-chain` points BTCPay at three fake explorers, of which two must agree, polling every 2 seconds. Drive them with `scripts/fake-chain.sh` (`pay`, `mine`, `reorg`, `drop`, `fail`), or run the end-to-end scenarios:
+
+```bash
+./dev.sh fake-chain
+python3 scripts/e2e_fake_chain.py
+./dev.sh real-chain   # back to the public explorers
+```

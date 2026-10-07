@@ -70,8 +70,3 @@ public class AddressAllocator(
         return state?.AccountDerivation == accountDerivation ? state.NextIndex : 0;
     }
 }
-
-public class NoAddressUsageCheck : IAddressUsageCheck
-{
-    public Task<bool> IsUsedAsync(string address, CancellationToken cancellationToken) => Task.FromResult(false);
-}

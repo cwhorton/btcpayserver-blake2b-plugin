@@ -8,6 +8,9 @@
 #   ./dev.sh logs         Follow BTCPay's logs
 #   ./dev.sh down         Stop everything (data is kept)
 #   ./dev.sh reset        Stop everything and delete all dev data
+#   ./dev.sh fake-chain   Restart BTCPay against 3 fake explorers (2 must agree); drive them
+#                         with scripts/fake-chain.sh
+#   ./dev.sh real-chain   Restart BTCPay against the real public explorers
 #   ./dev.sh sdk <cmd>    Run any command in the SDK container
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -42,12 +45,23 @@ case "${1:-}" in
   reset)
     docker compose down -v
     ;;
+  fake-chain)
+    build_plugin
+    export BTCB2_ESPLORA="http://fake-esplora-a:3002/api,http://fake-esplora-b:3002/api,http://fake-esplora-c:3002/api"
+    export BTCB2_REQUIRED_AGREEMENT=2 BTCB2_POLL_SECONDS=2
+    docker compose --profile fake-chain up -d --force-recreate fake-esplora-a fake-esplora-b fake-esplora-c btcpay
+    ;;
+  real-chain)
+    build_plugin
+    docker compose --profile fake-chain stop fake-esplora-a fake-esplora-b fake-esplora-c
+    docker compose up -d --force-recreate btcpay
+    ;;
   sdk)
     shift
     sdk "$@"
     ;;
   *)
-    sed -n '2,12p' "$0"
+    sed -n '2,15p' "$0"
     exit 1
     ;;
 esac

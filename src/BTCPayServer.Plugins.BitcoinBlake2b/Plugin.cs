@@ -1,7 +1,10 @@
+using System;
+using System.Net.Http;
 using BTCPayServer.Abstractions.Contracts;
 using BTCPayServer.Abstractions.Models;
 using BTCPayServer.Hosting;
 using BTCPayServer.Payments;
+using BTCPayServer.Plugins.BitcoinBlake2b.Chain;
 using BTCPayServer.Plugins.BitcoinBlake2b.Payments;
 using BTCPayServer.Plugins.BitcoinBlake2b.Rates;
 using BTCPayServer.Plugins.BitcoinBlake2b.Wallet;
@@ -27,7 +30,8 @@ public class Plugin : BaseBTCPayServerPlugin
     {
         var bootstrap = ((PluginServiceCollection)services).BootstrapServices;
         var btcpayChain = bootstrap.GetRequiredService<NBXplorerNetworkProvider>().NetworkType;
-        var configuredChain = bootstrap.GetService<IConfiguration>()?["BTCB2_CHAIN"];
+        var config = bootstrap.GetRequiredService<IConfiguration>();
+        var configuredChain = config["BTCB2_CHAIN"];
         var network = new Btcb2Network(Btcb2Network.SelectChain(btcpayChain, configuredChain));
 
         // Network, currency and pricing
@@ -49,12 +53,22 @@ public class Plugin : BaseBTCPayServerPlugin
         // Payment method
         services.AddDefaultPrettyName(network.PaymentMethodId, network.DisplayName);
         services.AddTransactionLinkProvider(network.PaymentMethodId, new DefaultTransactionLinkProvider(network.ExplorerTxLink));
-        services.AddSingleton<IAddressUsageCheck, NoAddressUsageCheck>();
+        services.AddHttpClient(EsploraChainSource.HttpClientName, c =>
+        {
+            c.Timeout = TimeSpan.FromSeconds(15);
+            c.DefaultRequestHeaders.UserAgent.ParseAdd("BTCPayServer-BitcoinBlake2b");
+        });
+        services.AddSingleton(p => new ChainSources(p.GetRequiredService<IHttpClientFactory>(), network, config["BTCB2_ESPLORA"], config["BTCB2_REQUIRED_AGREEMENT"]));
+        services.AddSingleton<ChainMonitor>();
+        services.AddSingleton<IAddressUsageCheck>(p => p.GetRequiredService<ChainMonitor>());
         services.AddSingleton<AddressAllocator>();
         services.AddSingleton<Btcb2PaymentHandler>();
         services.AddSingleton<IPaymentMethodHandler>(p => p.GetRequiredService<Btcb2PaymentHandler>());
         services.AddSingleton<ICheckoutModelExtension, Btcb2CheckoutModelExtension>();
         services.AddSingleton<IPaymentLinkExtension, Btcb2PaymentLinkExtension>();
+        var pollInterval = TimeSpan.FromSeconds(int.TryParse(config["BTCB2_POLL_SECONDS"], out var s) && s > 0 ? s : 15);
+        services.AddSingleton(p => ActivatorUtilities.CreateInstance<Btcb2Listener>(p, pollInterval));
+        services.AddHostedService(p => p.GetRequiredService<Btcb2Listener>());
 
         // UI
         services.AddUIExtension("store-wallets-nav", $"{ViewsDirectory}/NavExtension.cshtml");

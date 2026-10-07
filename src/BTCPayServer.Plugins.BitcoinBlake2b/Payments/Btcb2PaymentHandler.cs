@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using BTCPayServer.Data;
 using BTCPayServer.Payments;
+using BTCPayServer.Plugins.BitcoinBlake2b.Chain;
 using BTCPayServer.Plugins.BitcoinBlake2b.Wallet;
 using NBitcoin;
 using Newtonsoft.Json;
@@ -11,7 +12,7 @@ using Newtonsoft.Json.Linq;
 
 namespace BTCPayServer.Plugins.BitcoinBlake2b.Payments;
 
-public class Btcb2PaymentHandler(Btcb2Network network, AddressAllocator allocator) : IPaymentMethodHandler
+public class Btcb2PaymentHandler(Btcb2Network network, AddressAllocator allocator, ChainMonitor monitor) : IPaymentMethodHandler
 {
     /// <summary>Outputs below this are non-standard on Bitcoin-derived chains.</summary>
     static readonly decimal DustThreshold = Money.Satoshis(546).ToDecimal(MoneyUnit.BTC);
@@ -47,6 +48,13 @@ public class Btcb2PaymentHandler(Btcb2Network network, AddressAllocator allocato
         var prompt = context.Prompt;
         if (context.InvoiceEntity.Type != Client.Models.InvoiceType.TopUp && prompt.Calculate().Due < DustThreshold)
             throw new PaymentMethodUnavailableException("Amount is below the dust threshold");
+
+        // Never create an invoice that cannot be monitored.
+        if (!monitor.IsAvailable)
+            await monitor.RefreshAsync(CancellationToken.None);
+        if (!monitor.IsAvailable)
+            throw new PaymentMethodUnavailableException(
+                $"Not enough XBT chain data sources are reachable ({monitor.Healthy.Count} of {monitor.Set.RequiredAgreement} required)");
 
         // Reserved only now, after rates succeeded, so failed invoice attempts don't widen the wallet's address gap.
         var (address, index) = await allocator.ReserveAsync(context.Store.Id, prepare.Strategy, CancellationToken.None);

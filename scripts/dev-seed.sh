@@ -10,21 +10,27 @@ if [ ! -f .dev.env ]; then
   chmod 600 .dev.env
 fi
 source .dev.env
-AUTH="$DEV_ADMIN_EMAIL:$DEV_ADMIN_PASSWORD"
+save() { grep -v "^$1=" .dev.env > .dev.env.tmp; echo "$1=$2" >> .dev.env.tmp; mv .dev.env.tmp .dev.env; chmod 600 .dev.env; }
 
 # The first user created on a fresh server becomes its admin, no authentication needed.
-if ! curl -sf -u "$AUTH" "$URL/api/v1/users/me" > /dev/null; then
+# BTCPay accepts the password for Greenfield calls only in the account's first 5 minutes,
+# so an API key is created right away for later script use.
+if [ -z "${DEV_API_KEY:-}" ] || ! curl -sf -H "Authorization: token $DEV_API_KEY" "$URL/api/v1/users/me" > /dev/null; then
   curl -sf -X POST "$URL/api/v1/users" -H 'Content-Type: application/json' \
-    -d "{\"email\":\"$DEV_ADMIN_EMAIL\",\"password\":\"$DEV_ADMIN_PASSWORD\",\"isAdministrator\":true}" > /dev/null
-  echo "Created admin $DEV_ADMIN_EMAIL (password in .dev.env)"
+    -d "{\"email\":\"$DEV_ADMIN_EMAIL\",\"password\":\"$DEV_ADMIN_PASSWORD\",\"isAdministrator\":true}" > /dev/null \
+    && echo "Created admin $DEV_ADMIN_EMAIL (password in .dev.env)"
+  DEV_API_KEY=$(curl -sf -u "$DEV_ADMIN_EMAIL:$DEV_ADMIN_PASSWORD" -X POST "$URL/api/v1/api-keys" -H 'Content-Type: application/json' \
+    -d '{"label":"dev-scripts","permissions":["unrestricted"]}' | python3 -c 'import sys,json; print(json.load(sys.stdin)["apiKey"])') \
+    || { echo "Could not create an API key; create one under Account > API Keys and set DEV_API_KEY in .dev.env" >&2; exit 1; }
+  save DEV_API_KEY "$DEV_API_KEY"
+  DEV_STORE_ID=""
 fi
+AUTH_HEADER="Authorization: token $DEV_API_KEY"
 
-if [ -z "${DEV_STORE_ID:-}" ] || ! curl -sf -u "$AUTH" "$URL/api/v1/stores/$DEV_STORE_ID" > /dev/null; then
-  DEV_STORE_ID=$(curl -sf -u "$AUTH" -X POST "$URL/api/v1/stores" -H 'Content-Type: application/json' \
+if [ -z "${DEV_STORE_ID:-}" ] || ! curl -sf -H "$AUTH_HEADER" "$URL/api/v1/stores/$DEV_STORE_ID" > /dev/null; then
+  DEV_STORE_ID=$(curl -sf -H "$AUTH_HEADER" -X POST "$URL/api/v1/stores" -H 'Content-Type: application/json' \
     -d '{"name":"Dev Store","defaultCurrency":"USD"}' | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
-  grep -v '^DEV_STORE_ID=' .dev.env > .dev.env.tmp && mv .dev.env.tmp .dev.env
-  echo "DEV_STORE_ID=$DEV_STORE_ID" >> .dev.env
-  chmod 600 .dev.env
+  save DEV_STORE_ID "$DEV_STORE_ID"
   echo "Created store $DEV_STORE_ID"
 fi
 echo "Store: $URL/stores/$DEV_STORE_ID"

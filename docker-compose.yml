@@ -49,6 +49,10 @@ services:
       BTCPAY_UPDATEURL: ""
       BTCPAY_RECOMMENDED-PLUGINS: ""
       BTCPAY_VERBOSE: "true"
+      # Set by ./dev.sh fake-chain to use the fake explorers below instead of the public ones.
+      BTCPAY_BTCB2_ESPLORA: ${BTCB2_ESPLORA:-}
+      BTCPAY_BTCB2_REQUIRED_AGREEMENT: ${BTCB2_REQUIRED_AGREEMENT:-}
+      BTCPAY_BTCB2_POLL_SECONDS: ${BTCB2_POLL_SECONDS:-}
     volumes:
       - .:/src
       - nuget:/root/.nuget/packages
@@ -101,6 +105,25 @@ services:
     depends_on:
       - bitcoind
       - postgres
+
+  # Fake XBT explorers for local tests (./dev.sh fake-chain). Same testnet4 checkpoint as the real chain.
+  fake-esplora-a: &fake-esplora
+    image: python:3.13-alpine
+    profiles: ["fake-chain"]
+    command: ["python", "/app/fake_esplora.py", "--port", "3002", "--checkpoint-height", "150308",
+              "--checkpoint-hash", "000000000000b9d1b7e1bb0e77215ee92c6ef7ec8f4473e23908380649e779b6"]
+    volumes:
+      - ./scripts/fake-esplora:/app:ro
+    ports:
+      - "127.0.0.1:3010:3002"
+  fake-esplora-b:
+    <<: *fake-esplora
+    ports:
+      - "127.0.0.1:3011:3002"
+  fake-esplora-c:
+    <<: *fake-esplora
+    ports:
+      - "127.0.0.1:3012:3002"
 
 volumes:
   nuget:
