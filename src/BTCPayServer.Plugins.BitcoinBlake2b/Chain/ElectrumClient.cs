@@ -58,14 +58,15 @@ public record ElectrumEndpoint(string Host, int Port, bool UseTls, byte[]? Pinne
     public override string ToString() => $"{(UseTls ? "ssl" : "tcp")}://{Host}:{Port}";
 }
 
-public class ElectrumException(string message) : ChainSourceException(message);
+public class ElectrumException(string message, string? detail = null) : ChainSourceException(message, detail);
 
 /// <summary>
 /// A minimal Electrum protocol client: one persistent connection, one request at a time,
 /// reconnecting when the connection drops. Subscription notifications are ignored.
 /// </summary>
-public sealed class ElectrumClient(ElectrumEndpoint endpoint) : IDisposable
+public sealed class ElectrumClient(ElectrumEndpoint endpoint, bool restricted = false) : IDisposable
 {
+    const int MaxLineChars = 8 * 1024 * 1024;
     // BLAKE2b servers refuse clients below 1.8, which they assume can't read 164-byte headers.
     // This client never parses headers, so any version from 1.4 up works.
     static readonly string[] ProtocolVersions = ["1.4", "1.8"];
@@ -115,7 +116,10 @@ public sealed class ElectrumClient(ElectrumEndpoint endpoint) : IDisposable
         var tcp = new TcpClient();
         try
         {
-            await tcp.ConnectAsync(endpoint.Host, endpoint.Port, cancellationToken);
+            if (restricted)
+                await tcp.ConnectAsync(await NetworkRestrictions.ResolvePublicAsync(endpoint.Host, cancellationToken), endpoint.Port, cancellationToken);
+            else
+                await tcp.ConnectAsync(endpoint.Host, endpoint.Port, cancellationToken);
             Stream stream = tcp.GetStream();
             if (endpoint.UseTls)
             {
@@ -151,20 +155,48 @@ public sealed class ElectrumClient(ElectrumEndpoint endpoint) : IDisposable
         await _stream.FlushAsync(cancellationToken);
         while (true)
         {
-            var line = await _reader!.ReadLineAsync(cancellationToken) ?? throw new IOException("Connection closed by the server");
+            var line = await ReadLineAsync(cancellationToken);
             if (string.IsNullOrWhiteSpace(line))
                 continue;
             var message = JObject.Parse(line);
             if (message.Value<int?>("id") != id)
                 continue; // a notification, or a stale answer
             if (message["error"] is JToken { Type: not JTokenType.Null } error)
-                throw new ElectrumException($"{endpoint.Name}: {error["message"] ?? error}");
+                throw new ElectrumException($"{endpoint.Name}: the server returned an error for {method}", $"{endpoint.Name}: {error["message"] ?? error}");
             return message["result"] ?? JValue.CreateNull();
+        }
+    }
+
+    readonly char[] _buffer = new char[8192];
+    int _bufferStart, _bufferEnd;
+
+    /// <summary>A line of at most <see cref="MaxLineChars"/>, so a hostile server can't exhaust memory.</summary>
+    async Task<string> ReadLineAsync(CancellationToken cancellationToken)
+    {
+        var line = new StringBuilder();
+        while (true)
+        {
+            if (_bufferStart == _bufferEnd)
+            {
+                _bufferStart = 0;
+                _bufferEnd = await _reader!.ReadAsync(_buffer, cancellationToken);
+                if (_bufferEnd == 0)
+                    throw new IOException("Connection closed by the server");
+            }
+            var newline = Array.IndexOf(_buffer, '\n', _bufferStart, _bufferEnd - _bufferStart);
+            var end = newline < 0 ? _bufferEnd : newline;
+            line.Append(_buffer, _bufferStart, end - _bufferStart);
+            _bufferStart = newline < 0 ? _bufferEnd : newline + 1;
+            if (line.Length > MaxLineChars)
+                throw new ElectrumException($"{endpoint.Name}: answer too large");
+            if (newline >= 0)
+                return line.ToString().TrimEnd('\r');
         }
     }
 
     void Disconnect()
     {
+        _bufferStart = _bufferEnd = 0;
         _reader?.Dispose();
         _stream?.Dispose();
         _tcp?.Dispose();

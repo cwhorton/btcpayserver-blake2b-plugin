@@ -17,7 +17,7 @@
                 <label v-t="{ path: 'address', args: { paymentMethod: model.paymentMethodName }}"></label>
             </div>
         </div>
-        <div class="alert alert-warning small text-start mt-3 mb-0" role="alert" data-testid="BitcoinBlake2b-CheckoutWarning">
+        <div v-pre class="alert alert-warning small text-start mt-3 mb-0" role="alert" data-testid="BitcoinBlake2b-CheckoutWarning">
             Send only <strong>@Network.DisplayName</strong> (@Btcb2.ChainName) to this address. BTC sent here will not pay this invoice.
             Use a wallet that supports @Network.DisplayName replay protection.
         </div>

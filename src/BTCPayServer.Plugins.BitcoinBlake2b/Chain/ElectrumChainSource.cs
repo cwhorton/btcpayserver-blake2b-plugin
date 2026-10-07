@@ -34,7 +34,7 @@ public class ElectrumChainSource(ElectrumClient client, Btcb2Network network) : 
         {
             header = (await client.CallAsync("blockchain.block.header", [checkpoint.Height], cancellationToken)).Value<string>();
         }
-        catch (ElectrumException ex) when (ex.Message.Contains("height", StringComparison.OrdinalIgnoreCase))
+        catch (ElectrumException ex) when (ex.Detail.Contains("height", StringComparison.OrdinalIgnoreCase))
         {
             header = null;
         }

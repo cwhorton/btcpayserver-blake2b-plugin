@@ -43,8 +43,11 @@ def chain(*args):
     return subprocess.run([os.path.join(ROOT, "scripts", "fake-chain.sh"), *map(str, args)], check=True, capture_output=True, text=True).stdout.strip()
 
 
-def new_invoice(amount="10"):
-    invoice = api("POST", f"/api/v1/stores/{STORE}/invoices", {"amount": amount, "currency": "USD"})
+def new_invoice(amount="10", expiration_minutes=None):
+    body = {"amount": amount, "currency": "USD"}
+    if expiration_minutes:
+        body["checkout"] = {"expirationMinutes": expiration_minutes}
+    invoice = api("POST", f"/api/v1/stores/{STORE}/invoices", body)
     method = xbt(invoice["id"])
     assert method is not None, "XBT is not offered on the new invoice"
     return invoice["id"], method["destination"], round(float(method["due"]) * 1e8)
@@ -124,6 +127,28 @@ def test_vanishing_payment():
     wait("invoice back to unpaid with the full amount due", lambda: status(inv)[0] == "New" and round(float(xbt(inv)["due"]) * 1e8) == sats)
 
 
+def test_silence_is_not_evidence():
+    print("A payment keeps counting when one source goes quiet and another loses it")
+    inv, address, sats = new_invoice()
+    txid = chain("pay", address, sats)
+    wait("processing", lambda: status(inv)[0] == "Processing")
+    chain("fail", "on", "c")
+    try:
+        chain("drop", txid, "a")
+        # Only a omits it, b still reports it and c is silent: not enough evidence that it's gone.
+        stays("still counted", lambda: payments(inv) == [(f"{txid}-1", "Processing")], 12)
+    finally:
+        chain("fail", "off", "c")
+
+
+def test_late_payment():
+    print("A payment after the invoice expired is still recorded (paid late)")
+    inv, address, sats = new_invoice(expiration_minutes=1)
+    wait("invoice expires", lambda: status(inv)[0] == "Expired", 90)
+    chain("pay", address, sats)
+    wait("late payment recorded", lambda: status(inv) == ("Expired", "PaidLate"), 40)
+
+
 def test_outage():
     print("Too few chain sources reachable")
     chain("fail", "on", "a,b")
@@ -145,7 +170,8 @@ def test_outage():
 
 
 if __name__ == "__main__":
-    tests = [test_agreement_and_settlement, test_partial_payment, test_vanishing_payment, test_outage]
+    tests = [test_agreement_and_settlement, test_partial_payment, test_vanishing_payment, test_silence_is_not_evidence,
+             test_late_payment, test_outage]
     selected = [t for t in tests if len(sys.argv) < 2 or t.__name__ in sys.argv[1:]]
     for t in selected:
         t()

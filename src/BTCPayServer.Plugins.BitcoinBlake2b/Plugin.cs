@@ -50,11 +50,12 @@ public class Plugin : BaseBTCPayServerPlugin
         services.AddSingleton<IDefaultTranslationProvider, Btcb2TranslationProvider>();
         services.AddSingleton<IGlobalCheckoutModelExtension, Btcb2GlobalCheckoutExtension>();
         services.AddTransactionLinkProvider(network.PaymentMethodId, new DefaultTransactionLinkProvider(network.ExplorerTxLink));
-        services.AddHttpClient(EsploraChainSource.HttpClientName, c =>
-        {
-            c.Timeout = TimeSpan.FromSeconds(15);
-            c.DefaultRequestHeaders.UserAgent.ParseAdd("BTCPayServer-BitcoinBlake2b");
-        });
+        // Chain sources: no redirects (a source must answer for itself) and bounded responses.
+        services.AddHttpClient(EsploraChainSource.HttpClientName, ConfigureChainClient)
+            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false });
+        // Sources chosen by store owners may only reach the public internet.
+        services.AddHttpClient(EsploraChainSource.RestrictedHttpClientName, ConfigureChainClient)
+            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false, ConnectCallback = NetworkRestrictions.ConnectPublicAsync });
         services.AddSingleton(p => ActivatorUtilities.CreateInstance<ChainSources>(p, config["BTCB2_ESPLORA"] ?? "", config["BTCB2_REQUIRED_AGREEMENT"] ?? ""));
         services.AddSingleton<IAddressUsageCheck>(p => p.GetRequiredService<ChainSources>());
         services.AddHostedService<Btcb2SettingsLoader>();
@@ -71,5 +72,12 @@ public class Plugin : BaseBTCPayServerPlugin
         services.AddUIExtension("store-wallets-nav", $"{ViewsDirectory}/NavExtension.cshtml");
         services.AddUIExtension("server-nav", $"{ViewsDirectory}/ServerNavExtension.cshtml");
         services.AddUIExtension("checkout-end", $"{ViewsDirectory}/CheckoutBody.cshtml");
+    }
+
+    static void ConfigureChainClient(HttpClient client)
+    {
+        client.Timeout = TimeSpan.FromSeconds(15);
+        client.MaxResponseContentBufferSize = EsploraChainSource.MaxResponseBytes;
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("BTCPayServer-BitcoinBlake2b");
     }
 }

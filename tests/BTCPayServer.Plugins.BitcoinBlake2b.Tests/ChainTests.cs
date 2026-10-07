@@ -55,6 +55,27 @@ public class ChainTests
     }
 
     [Fact]
+    public void ASourceListingAnOutputTwiceCountsOnce()
+    {
+        // A lying Electrum server repeats a made-up transaction in its history.
+        var liar = Source("liar", 200, new ChainOutput("fake", 1, 50_000, 190), new ChainOutput("fake", 1, 50_000, 189));
+        var view = ObservationAggregator.Aggregate([liar, Source("honest", 200)], 2);
+        Assert.True(view.Conclusive);
+        Assert.Empty(view.Outputs);
+        // And the same source under two observations (same URL) is one source.
+        var twice = ObservationAggregator.Aggregate([Source("a", 200, Unconfirmed), Source("a", 200, Unconfirmed)], 2);
+        Assert.False(twice.Conclusive);
+    }
+
+    [Fact]
+    public void CountsSourcesThatOmitAPayment()
+    {
+        var view = ObservationAggregator.Aggregate([Source("a", 100, Unconfirmed), Source("b", 100), Source("c", 100)], 2);
+        Assert.Equal(2, view.OmittedBy("aa-1"));
+        Assert.Equal(3, view.OmittedBy("other-0"));
+    }
+
+    [Fact]
     public void DisagreeingAmountsDoNotCombine()
     {
         var view = ObservationAggregator.Aggregate(

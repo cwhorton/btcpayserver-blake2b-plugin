@@ -27,7 +27,8 @@ public class AddressAllocator(
     Btcb2Network network)
 {
     const string SettingName = "BitcoinBlake2b.NextAddressIndex";
-    const int MaxSkipped = 1000;
+    const int MaxSkipped = 200;
+    static readonly System.TimeSpan MaxSearchTime = System.TimeSpan.FromSeconds(45);
 
     public class IndexState
     {
@@ -35,12 +36,17 @@ public class AddressAllocator(
         public int NextIndex { get; set; }
     }
 
-    // A single BTCPay instance owns the database, so an in-process lock is enough.
-    readonly SemaphoreSlim _lock = new(1, 1);
+    // A single BTCPay instance owns the database, so in-process locks are enough: one per store,
+    // so one store's slow search can't hold up every other store's invoices.
+    readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> _locks = new();
 
     public async Task<(BitcoinAddress Address, int Index)> ReserveAsync(string storeId, DerivationStrategyBase strategy, CancellationToken cancellationToken)
     {
-        await _lock.WaitAsync(cancellationToken);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(MaxSearchTime);
+        cancellationToken = timeout.Token;
+        var storeLock = _locks.GetOrAdd(storeId, _ => new SemaphoreSlim(1, 1));
+        await storeLock.WaitAsync(cancellationToken);
         try
         {
             var key = strategy.ToString();
@@ -58,9 +64,13 @@ public class AddressAllocator(
             }
             throw new PaymentMethodUnavailableException($"No unused address found in the next {MaxSkipped} addresses of this wallet");
         }
+        catch (System.OperationCanceledException) when (timeout.IsCancellationRequested)
+        {
+            throw new PaymentMethodUnavailableException("Finding an unused address took too long");
+        }
         finally
         {
-            _lock.Release();
+            storeLock.Release();
         }
     }
 

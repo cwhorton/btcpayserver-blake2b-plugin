@@ -17,6 +17,9 @@ public class Btcb2RateProvider(IEnumerable<IQuoteSource> sources) : IRateProvide
 {
     public const string SourceId = "btcb2";
 
+    /// <summary>The last price at least two exchanges agreed on, used to check a lone exchange.</summary>
+    (decimal Mid, DateTimeOffset At)? _reference;
+
     public RateSourceInfo RateSourceInfo => new(SourceId, "Bitcoin BLAKE2b (NeoxEX + NonKYC)", "https://neoxa.exchange/trade/BTCB2_USDC");
 
     public async Task<PairRate[]> GetRatesAsync(CancellationToken cancellationToken)
@@ -33,9 +36,12 @@ public class Btcb2RateProvider(IEnumerable<IQuoteSource> sources) : IRateProvide
             }
         }));
 
-        var rate = QuoteCombiner.Combine(
+        var (rate, exchanges) = QuoteCombiner.CombineDetailed(
             results.Where(r => r.Quote is not null).Select(r => r.Quote!),
-            results.Where(r => r.Error is not null).Select(r => r.Error!));
+            results.Where(r => r.Error is not null).Select(r => r.Error!),
+            _reference);
+        if (exchanges >= 2)
+            _reference = ((rate.Bid + rate.Ask) / 2m, DateTimeOffset.UtcNow);
         return [new PairRate(new CurrencyPair(Btcb2.CryptoCode, "USD"), rate)];
     }
 }

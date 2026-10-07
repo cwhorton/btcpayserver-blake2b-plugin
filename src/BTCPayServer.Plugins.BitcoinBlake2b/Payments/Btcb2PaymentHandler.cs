@@ -33,9 +33,17 @@ public class Btcb2PaymentHandler(Btcb2Network network, AddressAllocator allocato
         context.Prompt.Divisibility = network.Divisibility;
         if (context.Prompt.Activated)
         {
-            var config = ParsePaymentMethodConfig(context.PaymentMethodConfig);
-            if (config.Chain == network.Chain)
-                context.State = new Prepare { Config = config, Strategy = WalletKey.ParseDerivation(config.AccountDerivation, network) };
+            // BTCPay doesn't catch errors here: a broken XBT config must not stop the store's other payment methods.
+            try
+            {
+                var config = ParsePaymentMethodConfig(context.PaymentMethodConfig);
+                if (config.Chain == network.Chain)
+                    context.State = new Prepare { Config = config, Strategy = WalletKey.ParseDerivation(config.AccountDerivation, network) };
+            }
+            catch (Exception ex)
+            {
+                context.Logs.Write($"The store's XBT wallet settings can't be read ({ex.Message})", InvoiceEventData.EventSeverity.Error);
+            }
         }
         return Task.CompletedTask;
     }
@@ -43,7 +51,7 @@ public class Btcb2PaymentHandler(Btcb2Network network, AddressAllocator allocato
     public async Task ConfigurePrompt(PaymentMethodContext context)
     {
         if (context.State is not Prepare prepare)
-            throw new PaymentMethodUnavailableException($"The store's XBT wallet was set up for a different chain than this server's ({network.Chain})");
+            throw new PaymentMethodUnavailableException($"The store's XBT wallet is invalid or was set up for a different chain than this server's ({network.Chain})");
 
         var prompt = context.Prompt;
         if (context.InvoiceEntity.Type != Client.Models.InvoiceType.TopUp && prompt.Calculate().Due < DustThreshold)

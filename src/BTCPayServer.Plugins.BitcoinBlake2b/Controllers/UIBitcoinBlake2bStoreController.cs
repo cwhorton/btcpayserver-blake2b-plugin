@@ -36,7 +36,7 @@ public class UIBitcoinBlake2bStoreController(
         var storeSources = await sources.GetStoreSettingsAsync(Store.Id);
         vm.SourceMode = storeSources?.Mode ?? ChainSourceMode.Public;
         vm.OwnSources = string.Join("\n", storeSources?.OwnSources ?? []);
-        await FillSources(vm, test: null);
+        await FillSources(vm);
         var config = GetConfig();
         if (config is not null)
         {
@@ -70,11 +70,10 @@ public class UIBitcoinBlake2bStoreController(
                 ChainSources.ValidateSource(url);
             if (command == "test")
             {
-                var vm = new Btcb2WalletViewModel { SourceMode = sourceMode, OwnSources = ownSources };
-                var test = sources.GetMonitor(urls, agreement, ChainSources.Describe(sourceMode));
+                // Store owners' sources may only reach the public internet.
+                using var test = sources.CreateTestMonitor(urls, agreement, ChainSources.Describe(sourceMode), restricted: true);
                 await test.RefreshAsync(HttpContext.RequestAborted);
-                await FillSources(vm, test);
-                return await SettingsWith(vm);
+                return await SettingsWith(new Btcb2WalletViewModel { SourceMode = sourceMode, OwnSources = ownSources, TestSources = SourceSetViewModel.From(test) });
             }
             await sources.SaveStoreSettingsAsync(store.Id, sourceMode == ChainSourceMode.Public ? null : new Btcb2StoreSourceSettings { Mode = sourceMode, OwnSources = own });
         }
@@ -106,14 +105,13 @@ public class UIBitcoinBlake2bStoreController(
         return page;
     }
 
-    async Task FillSources(Btcb2WalletViewModel vm, ChainMonitor? test)
+    async Task FillSources(Btcb2WalletViewModel vm)
     {
         var monitor = await sources.GetMonitorForStoreAsync(Store.Id);
         if (monitor.LastRefresh is null || monitor.LastRefresh < DateTimeOffset.UtcNow.AddMinutes(-1))
             await monitor.RefreshAsync(HttpContext.RequestAborted);
         vm.Sources = SourceSetViewModel.From(monitor);
         vm.CanChooseSources = sources.ServerSettings.AllowStoreSources && !sources.ConfiguredByEnvironment;
-        vm.TestSources = test is null ? vm.TestSources : SourceSetViewModel.From(test);
     }
 
     [HttpPost("preview")]
@@ -122,7 +120,7 @@ public class UIBitcoinBlake2bStoreController(
     {
         vm.DisplayName = network.DisplayName;
         vm.Chain = network.Chain;
-        await FillSources(vm, test: null);
+        await FillSources(vm);
         try
         {
             var settings = WalletKey.Parse(vm.WalletKey ?? "", network);

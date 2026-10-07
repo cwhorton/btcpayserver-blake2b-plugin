@@ -70,11 +70,17 @@ public class RateTests
     }
 
     [Fact]
-    public void FallsBackToOneExchangeWhenTheOtherIsDown()
+    public void LoneExchangeNeedsARecentTwoExchangePrice()
     {
-        var rate = QuoteCombiner.Combine([new("A", 690m, 700m)], ["B: timeout"]);
+        var now = DateTimeOffset.UtcNow;
+        // No reference: refused rather than trusting one thin market.
+        Assert.Throws<QuoteUnavailableException>(() => QuoteCombiner.Combine([new("A", 690m, 700m)], ["B: timeout"], null, now));
+        // Close to a recent two-exchange price: accepted.
+        var rate = QuoteCombiner.Combine([new("A", 690m, 700m)], ["B: timeout"], (697m, now.AddMinutes(-10)), now);
         Assert.Equal(690m, rate.Bid);
-        Assert.Equal(700m, rate.Ask);
+        // Moved more than 5% from it, or the reference is too old: refused.
+        Assert.Throws<QuoteUnavailableException>(() => QuoteCombiner.Combine([new("A", 760m, 770m)], [], (697m, now.AddMinutes(-10)), now));
+        Assert.Throws<QuoteUnavailableException>(() => QuoteCombiner.Combine([new("A", 690m, 700m)], [], (697m, now.AddHours(-2)), now));
     }
 
     [Fact]
@@ -89,10 +95,12 @@ public class RateTests
     [Fact]
     public void IgnoresThinOrInvalidOrderBooks()
     {
-        // B's spread is about 20%, C's bid is above its ask, D has no bid: only A is used.
-        var rate = QuoteCombiner.Combine(
-            [new("A", 690m, 700m), new("B", 600m, 730m), new("C", 710m, 700m), new("D", 0m, 700m)], []);
+        // B's spread is about 20%, C's bid is above its ask, D has no bid: only A is used,
+        // and only because a recent reference vouches for it.
+        var (rate, exchanges) = QuoteCombiner.CombineDetailed(
+            [new("A", 690m, 700m), new("B", 600m, 730m), new("C", 710m, 700m), new("D", 0m, 700m)], [], (695m, DateTimeOffset.UtcNow));
         Assert.Equal(690m, rate.Bid);
+        Assert.Equal(1, exchanges);
 
         var ex = Assert.Throws<QuoteUnavailableException>(() => QuoteCombiner.Combine([new("B", 600m, 730m)], ["A: down"]));
         Assert.Contains("A: down", ex.Message);
@@ -100,14 +108,21 @@ public class RateTests
     }
 
     [Fact]
-    public async Task ProviderReturnsUsdRateAndToleratesOneFailingSource()
+    public async Task ProviderReturnsUsdRateAndToleratesOneFailingSourceAfterAgreement()
     {
-        var provider = new Btcb2RateProvider([new FakeSource("A", new("A", 690m, 700m)), new FakeSource("B", null)]);
-        var rates = await provider.GetRatesAsync(CancellationToken.None);
-        var rate = Assert.Single(rates);
+        var b = new FakeSource("B", new("B", 700m, 710m));
+        var provider = new Btcb2RateProvider([new FakeSource("A", new("A", 690m, 700m)), b]);
+        var rate = Assert.Single(await provider.GetRatesAsync(CancellationToken.None));
         Assert.Equal("BTCB2_USD", rate.CurrencyPair.ToString());
-        Assert.Equal(690m, rate.BidAsk.Bid);
+        Assert.Equal(695m, rate.BidAsk.Bid);
 
+        // B goes down: A alone is accepted because it is close to the price both agreed on.
+        b.Quote = null;
+        Assert.Equal(690m, Assert.Single(await provider.GetRatesAsync(CancellationToken.None)).BidAsk.Bid);
+
+        // A fresh provider with one source down has nothing to check it against.
+        var fresh = new Btcb2RateProvider([new FakeSource("A", new("A", 690m, 700m)), new FakeSource("B", null)]);
+        await Assert.ThrowsAsync<QuoteUnavailableException>(() => fresh.GetRatesAsync(CancellationToken.None));
         var allDown = new Btcb2RateProvider([new FakeSource("A", null), new FakeSource("B", null)]);
         await Assert.ThrowsAsync<QuoteUnavailableException>(() => allDown.GetRatesAsync(CancellationToken.None));
     }
@@ -133,8 +148,9 @@ public class RateTests
 
     class FakeSource(string name, ExchangeQuote? quote) : IQuoteSource
     {
+        public ExchangeQuote? Quote { get; set; } = quote;
         public string Name => name;
         public Task<ExchangeQuote> GetQuoteAsync(CancellationToken cancellationToken) =>
-            quote is null ? throw new HttpRequestException("unreachable") : Task.FromResult(quote);
+            Quote is null ? throw new HttpRequestException("unreachable") : Task.FromResult(Quote);
     }
 }

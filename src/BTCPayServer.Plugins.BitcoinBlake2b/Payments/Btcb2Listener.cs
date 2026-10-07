@@ -10,6 +10,8 @@ using BTCPayServer.Data;
 using BTCPayServer.Events;
 using BTCPayServer.Plugins.BitcoinBlake2b.Chain;
 using BTCPayServer.Services.Invoices;
+using Dapper;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using NBitcoin;
@@ -18,9 +20,9 @@ using Newtonsoft.Json.Linq;
 namespace BTCPayServer.Plugins.BitcoinBlake2b.Payments;
 
 /// <summary>
-/// Polls the chain data sources for every invoice awaiting XBT, records payments once enough
-/// sources agree, follows their confirmations, and stops counting a payment that the sources
-/// no longer see (replaced, double-spent or reorganized away).
+/// Polls the chain data sources for every invoice that may still receive XBT, records payments
+/// once enough sources agree, follows their confirmations, and stops counting a payment only
+/// when enough sources positively report it gone (replaced, double-spent or reorganized away).
 /// </summary>
 public class Btcb2Listener(
     Btcb2Network network,
@@ -33,13 +35,28 @@ public class Btcb2Listener(
     TimeSpan pollInterval) : BackgroundService
 {
     static readonly TimeSpan IdleRefresh = TimeSpan.FromMinutes(1);
-    /// <summary>Consecutive conclusive polls without a payment before it stops counting, so one glitch can't flip it.</summary>
-    const int MissingPollsBeforeUnaccounted = 2;
+    /// <summary>Expired and invalid invoices keep being watched this long, so late payments are still recorded.</summary>
+    static readonly TimeSpan LatePaymentWindow = TimeSpan.FromDays(3);
+    /// <summary>Consecutive polls with enough sources reporting an unconfirmed payment gone before it stops counting.</summary>
+    const int PollsBeforeUnconfirmedGone = 2;
+    /// <summary>A confirmed payment must be reported gone by every answering source, for this many polls in a row.</summary>
+    const int PollsBeforeConfirmedGone = 6;
     /// <summary>Keep following confirmations past settlement, as BTCPay does for Bitcoin.</summary>
     const long MaxTrackedConfirmations = 100;
 
-    readonly ConcurrentDictionary<string, int> _missingStreak = new();
+    readonly ConcurrentDictionary<string, int> _goneStreak = new();
+    readonly ConcurrentDictionary<string, (DateTimeOffset Next, long Tip)> _schedule = new();
     DateTimeOffset _lastRefresh = DateTimeOffset.MinValue;
+
+    /// <summary>
+    /// How soon to look at an invoice again. Public explorers are shared and rate limited, so
+    /// only invoices a customer is likely waiting on are checked every poll.
+    /// </summary>
+    public static TimeSpan NextCheckIn(TimeSpan pollInterval, TimeSpan invoiceAge, bool hasPendingPayment, bool tipChanged) =>
+        hasPendingPayment ? (tipChanged ? pollInterval : pollInterval * 4)
+        : invoiceAge < TimeSpan.FromHours(1) ? pollInterval
+        : invoiceAge < TimeSpan.FromHours(24) ? pollInterval * 8
+        : pollInterval * 40;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -64,67 +81,98 @@ public class Btcb2Listener(
         }
     }
 
-    public async Task PollAsync(CancellationToken cancellationToken)
+    class Watched
     {
-        var invoices = await invoiceRepository.GetMonitoredInvoices(network.PaymentMethodId, cancellationToken);
-        var idleRefreshDue = DateTimeOffset.UtcNow - _lastRefresh >= IdleRefresh;
-        if (invoices.Length == 0 && !idleRefreshDue)
-            return;
-
-        // Each store's invoices are checked against that store's sources; each set of sources is refreshed once.
-        var groups = new Dictionary<ChainMonitor, List<InvoiceEntity>>();
-        foreach (var invoice in invoices)
-        {
-            var monitor = await sources.GetMonitorForStoreAsync(invoice.StoreId);
-            if (!groups.TryGetValue(monitor, out var list))
-                groups[monitor] = list = [];
-            list.Add(invoice);
-        }
-        if (idleRefreshDue)
-        {
-            groups.TryAdd(sources.ServerMonitor, []);
-            _lastRefresh = DateTimeOffset.UtcNow;
-        }
-        await Task.WhenAll(groups.Keys.Select(m => m.RefreshAsync(cancellationToken)));
-
-        foreach (var (monitor, group) in groups)
-        {
-            if (!monitor.IsAvailable)
-            {
-                if (group.Count > 0)
-                    logger.LogWarning("Not enough XBT chain data sources available for {Sources} ({Healthy} of {Required} required); {Count} invoice(s) not updated",
-                        monitor.Set.Description, monitor.Healthy.Count, monitor.Set.RequiredAgreement, group.Count);
-                continue;
-            }
-            foreach (var invoice in group)
-            {
-                try
-                {
-                    await UpdateInvoiceAsync(invoice, monitor, cancellationToken);
-                }
-                catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
-                {
-                    logger.LogError(ex, "Error while checking XBT payments of invoice {InvoiceId}", invoice.Id);
-                }
-            }
-        }
+        public string InvoiceId { get; set; } = "";
+        public string StoreId { get; set; } = "";
+        public string Address { get; set; } = "";
     }
 
-    async Task UpdateInvoiceAsync(InvoiceEntity invoice, ChainMonitor monitor, CancellationToken cancellationToken)
+    /// <summary>
+    /// Invoices that may still receive XBT: pending ones, ones with payments awaiting confirmation,
+    /// and recently expired or invalid ones (late payments). BTCPay's own monitored-invoice list
+    /// misses the last kind, and pending invoices already paid partly with another method.
+    /// </summary>
+    async Task<Dictionary<string, (string StoreId, string[] Addresses)>> GetWatchedInvoicesAsync(CancellationToken cancellationToken)
+    {
+        await using var ctx = invoiceRepository.DbContextFactory.CreateContext();
+        var rows = await ctx.Database.GetDbConnection().QueryAsync<Watched>(new CommandDefinition("""
+            SELECT i."Id" AS "InvoiceId", i."StoreDataId" AS "StoreId", ai."Address" AS "Address"
+            FROM "Invoices" i
+            JOIN "AddressInvoices" ai ON ai."InvoiceDataId" = i."Id" AND ai."PaymentMethodId" = @pmi
+            WHERE is_pending(i."Status")
+               OR (i."Status" IN ('Expired', 'Invalid') AND i."Created" > @since)
+               OR EXISTS (SELECT 1 FROM "Payments" p WHERE p."InvoiceDataId" = i."Id" AND p."PaymentMethodId" = @pmi AND is_pending(p."Status"))
+            """, new { pmi = network.PaymentMethodId.ToString(), since = DateTimeOffset.UtcNow - LatePaymentWindow }, cancellationToken: cancellationToken));
+        return rows.GroupBy(r => r.InvoiceId)
+            .ToDictionary(g => g.Key, g => (g.First().StoreId, g.Select(r => r.Address).Distinct().ToArray()));
+    }
+
+    public async Task PollAsync(CancellationToken cancellationToken)
+    {
+        var watched = await GetWatchedInvoicesAsync(cancellationToken);
+        var now = DateTimeOffset.UtcNow;
+        var idleRefreshDue = now - _lastRefresh >= IdleRefresh;
+        if (watched.Count == 0 && !idleRefreshDue)
+            return;
+        foreach (var gone in _schedule.Keys.Except(watched.Keys).ToArray())
+            _schedule.TryRemove(gone, out _);
+
+        // Each store's invoices are checked against that store's sources; each set of sources is refreshed once.
+        var monitors = new Dictionary<string, ChainMonitor>();
+        foreach (var (id, (storeId, _)) in watched)
+            monitors[id] = await sources.GetMonitorForStoreAsync(storeId);
+        var toRefresh = monitors.Values.ToHashSet();
+        if (idleRefreshDue)
+        {
+            toRefresh.Add(sources.ServerMonitor);
+            _lastRefresh = now;
+        }
+        await Task.WhenAll(toRefresh.Select(m => m.RefreshAsync(cancellationToken)));
+
+        foreach (var (id, (_, addresses)) in watched)
+        {
+            var monitor = monitors[id];
+            if (!monitor.IsAvailable)
+                continue;
+            if (_schedule.TryGetValue(id, out var due) && due.Next > now && due.Tip == monitor.TipHeight)
+                continue;
+            try
+            {
+                var invoice = await invoiceRepository.GetInvoice(id);
+                if (invoice is null)
+                    continue;
+                var pending = await UpdateInvoiceAsync(invoice, addresses, monitor, cancellationToken);
+                var tipChanged = !_schedule.TryGetValue(id, out var last) || last.Tip != monitor.TipHeight;
+                _schedule[id] = (DateTimeOffset.UtcNow + NextCheckIn(pollInterval, now - invoice.InvoiceTime, pending, tipChanged), monitor.TipHeight);
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                logger.LogError(ex, "Error while checking XBT payments of invoice {InvoiceId}", id);
+            }
+        }
+
+        foreach (var monitor in toRefresh.Where(m => !m.IsAvailable && monitors.ContainsValue(m)))
+            logger.LogWarning("Not enough XBT chain data sources available for {Sources} ({Healthy} of {Required} required); its invoices are not being updated",
+                monitor.Set.Description, monitor.Healthy.Count, monitor.Set.RequiredAgreement);
+        sources.PruneIdleMonitors();
+    }
+
+    /// <returns>Whether the invoice has XBT payments still waiting for confirmations.</returns>
+    async Task<bool> UpdateInvoiceAsync(InvoiceEntity invoice, string[] trackedAddresses, ChainMonitor monitor, CancellationToken cancellationToken)
     {
         var pmi = network.PaymentMethodId;
         var prompt = invoice.GetPaymentPrompt(pmi);
         if (prompt?.Details is not JToken promptDetails)
-            return;
+            return false;
         var details = handler.ParsePaymentPromptDetails(promptDetails);
         var required = details.ConfirmationsRequired;
+        // Every XBT payment of the invoice, whatever its status, so none is mistaken for new.
         var payments = invoice.GetPayments(false).Where(p => p.PaymentMethodId == pmi).ToDictionary(p => p.Id);
-        var addresses = invoice.Addresses
-            .Where(a => a.PaymentMethodId == pmi).Select(a => a.Address)
-            .Append(prompt.Destination)
-            .OfType<string>().Distinct().ToArray();
+        var addresses = trackedAddresses.Append(prompt.Destination).OfType<string>().Distinct().ToArray();
 
         var updated = new List<PaymentEntity>();
+        var added = new List<(AgreedOutput Output, Btcb2PaymentData Data, PaymentStatus Status)>();
         foreach (var address in addresses)
         {
             var view = await monitor.ViewAddressAsync(address, cancellationToken);
@@ -133,7 +181,7 @@ public class Btcb2Listener(
 
             foreach (var output in view.Outputs)
             {
-                _missingStreak.TryRemove(Key(invoice, output.PaymentId), out _);
+                _goneStreak.TryRemove(Key(invoice, output.PaymentId), out _);
                 var data = new Btcb2PaymentData
                 {
                     TxId = output.TxId,
@@ -143,10 +191,13 @@ public class Btcb2Listener(
                     ConfirmationCount = Math.Min(output.Confirmations, MaxTrackedConfirmations),
                     SeenBy = output.SeenBy
                 };
-                var status = data.ConfirmationCount >= required ? PaymentStatus.Settled : PaymentStatus.Processing;
                 if (payments.TryGetValue(output.PaymentId, out var existing))
                 {
                     var previous = handler.ParsePaymentDetails(existing.Details);
+                    // Which sources answered varies between polls: in the same block, confirmations only go up.
+                    if (previous.BlockHeight is not null && previous.BlockHeight == data.BlockHeight && data.ConfirmationCount < previous.ConfirmationCount)
+                        data.ConfirmationCount = previous.ConfirmationCount;
+                    var status = data.ConfirmationCount >= required ? PaymentStatus.Settled : PaymentStatus.Processing;
                     if (existing.Status == status && previous.ConfirmationCount == data.ConfirmationCount && previous.BlockHeight == data.BlockHeight)
                         continue;
                     if (existing.Status == PaymentStatus.Unaccounted)
@@ -157,21 +208,29 @@ public class Btcb2Listener(
                 }
                 else
                 {
-                    await AddPaymentAsync(invoice, output, data, status);
+                    added.Add((output, data, data.ConfirmationCount >= required ? PaymentStatus.Settled : PaymentStatus.Processing));
                 }
             }
 
-            // Payments to this address that the sources no longer report.
-            var seen = view.Outputs.Select(o => o.PaymentId).ToHashSet();
-            foreach (var payment in payments.Values.Where(p => p.Destination == address && p.Accounted && !seen.Contains(p.Id)))
+            // Counted payments to this address that are missing from the agreed view. Silence is not
+            // evidence: enough sources must answer and positively not report the payment.
+            var agreed = view.Outputs.Select(o => o.PaymentId).ToHashSet();
+            foreach (var payment in payments.Values.Where(p => p.Destination == address && p.Accounted && !agreed.Contains(p.Id)))
             {
-                var streak = _missingStreak.AddOrUpdate(Key(invoice, payment.Id), 1, (_, n) => n + 1);
-                if (streak < MissingPollsBeforeUnaccounted)
+                var key = Key(invoice, payment.Id);
+                var confirmed = handler.ParsePaymentDetails(payment.Details).ConfirmationCount > 0;
+                var omitted = view.OmittedBy(payment.Id);
+                var evidence = omitted >= monitor.Set.RequiredAgreement && (!confirmed || omitted == view.Responded);
+                if (!evidence)
                     continue;
-                logger.LogWarning("XBT payment {PaymentId} to invoice {InvoiceId} is no longer seen on chain; it no longer counts", payment.Id, invoice.Id);
+                var streak = _goneStreak.AddOrUpdate(key, 1, (_, n) => n + 1);
+                if (streak < (confirmed ? PollsBeforeConfirmedGone : PollsBeforeUnconfirmedGone))
+                    continue;
+                logger.LogWarning("XBT payment {PaymentId} to invoice {InvoiceId} is no longer on chain according to {Count} source(s); it no longer counts",
+                    payment.Id, invoice.Id, omitted);
                 payment.Status = PaymentStatus.Unaccounted;
                 updated.Add(payment);
-                _missingStreak.TryRemove(Key(invoice, payment.Id), out _);
+                _goneStreak.TryRemove(key, out _);
             }
         }
 
@@ -180,6 +239,10 @@ public class Btcb2Listener(
             await paymentService.UpdatePayments(updated);
             eventAggregator.Publish(new InvoiceNeedUpdateEvent(invoice.Id));
         }
+        foreach (var (output, data, status) in added)
+            await AddPaymentAsync(invoice, output, data, status);
+
+        return payments.Values.Any(p => p.Status == PaymentStatus.Processing) || added.Any(a => a.Status == PaymentStatus.Processing);
     }
 
     async Task AddPaymentAsync(InvoiceEntity invoice, AgreedOutput output, Btcb2PaymentData data, PaymentStatus status)
@@ -197,7 +260,9 @@ public class Btcb2Listener(
             return;
         logger.LogInformation("Invoice {InvoiceId} received {Amount} {Currency} in {PaymentId} (seen by {Sources})",
             invoice.Id, payment.Value, network.DisplayName, payment.Id, string.Join(", ", output.SeenBy));
-        eventAggregator.Publish(new InvoiceEvent(invoice, InvoiceEvent.ReceivedPayment) { Payment = payment });
+        // Subscribers (webhooks, notifications) need the invoice as it is now, with this payment.
+        var current = await invoiceRepository.GetInvoice(invoice.Id) ?? invoice;
+        eventAggregator.Publish(new InvoiceEvent(current, InvoiceEvent.ReceivedPayment) { Payment = payment });
     }
 
     static string Key(InvoiceEntity invoice, string paymentId) => $"{invoice.Id}/{paymentId}";

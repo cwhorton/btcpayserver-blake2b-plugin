@@ -7,6 +7,7 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using BTCPayServer.Abstractions.Contracts;
+using BTCPayServer.Configuration;
 using BTCPayServer.Plugins.BitcoinBlake2b.Wallet;
 using BTCPayServer.Services.Stores;
 using Microsoft.Extensions.Logging;
@@ -19,12 +20,14 @@ public record ChainSourceSet(IReadOnlyList<IChainSource> Sources, int RequiredAg
 /// <summary>
 /// Decides which chain data sources each store uses and keeps one <see cref="ChainMonitor"/>
 /// per distinct set of sources. The server admin chooses the server's sources; store owners
-/// may choose their own if the admin allows it. BTCPAY_BTCB2_ESPLORA (comma-separated
-/// explorer API URLs or Electrum servers) and BTCPAY_BTCB2_REQUIRED_AGREEMENT override the
-/// admin's choice for the whole server.
+/// may choose their own if the admin allows it, limited to public internet hosts.
+/// BTCPAY_BTCB2_ESPLORA (comma-separated explorer API URLs or Electrum servers) and
+/// BTCPAY_BTCB2_REQUIRED_AGREEMENT override the admin's choice for the whole server.
 /// </summary>
 public class ChainSources : IAddressUsageCheck
 {
+    static readonly TimeSpan IdleMonitorLifetime = TimeSpan.FromHours(1);
+
     readonly IHttpClientFactory _httpClientFactory;
     readonly Btcb2Network _network;
     readonly ISettingsRepository _settingsRepository;
@@ -43,12 +46,38 @@ public class ChainSources : IAddressUsageCheck
         _settingsRepository = settingsRepository;
         _storeRepository = storeRepository;
         _loggerFactory = loggerFactory;
-        var urls = ParseUrls(environmentUrls);
-        if (urls.Length > 0)
-            _environment = (urls, int.TryParse(environmentAgreement, out var a) ? a : 1);
+        _environment = ParseEnvironment(environmentUrls, environmentAgreement);
         _serverMonitor = _environment is { } env
             ? GetMonitor(env.Urls, env.RequiredAgreement, "Set by BTCPAY_BTCB2_ESPLORA")
             : GetMonitor(network.PublicEsploraUrls, network.PublicRequiredAgreement, "Public explorers");
+    }
+
+    /// <summary>
+    /// Several sources default to two having to agree: one source alone is trusted only when
+    /// it's the only one, or when the operator says so.
+    /// </summary>
+    /// <exception cref="ConfigException">For invalid sources or agreement.</exception>
+    public static (string[] Urls, int RequiredAgreement)? ParseEnvironment(string? urls, string? agreement)
+    {
+        var list = ParseUrls(urls);
+        if (list.Length == 0)
+            return null;
+        try
+        {
+            foreach (var url in list)
+                ValidateSource(url);
+        }
+        catch (FormatException ex)
+        {
+            throw new ConfigException($"BTCPAY_BTCB2_ESPLORA: {ex.Message}");
+        }
+        var count = list.Select(Canonical).Distinct().Count();
+        int required;
+        if (string.IsNullOrWhiteSpace(agreement))
+            required = Math.Min(2, count);
+        else if (!int.TryParse(agreement, out required) || required < 1 || required > count)
+            throw new ConfigException($"BTCPAY_BTCB2_REQUIRED_AGREEMENT must be a number from 1 to {count}, not '{agreement}'");
+        return (list, required);
     }
 
     public Btcb2ServerSettings ServerSettings { get; private set; } = new();
@@ -83,7 +112,8 @@ public class ChainSources : IAddressUsageCheck
     void ApplyServerSettings(Btcb2ServerSettings settings)
     {
         ServerSettings = settings;
-        _network.DisplayName = string.IsNullOrWhiteSpace(settings.DisplayName) ? Btcb2.DefaultDisplayName : settings.DisplayName.Trim();
+        var name = settings.DisplayName?.Trim();
+        _network.DisplayName = Btcb2.IsValidDisplayName(name) ? name! : Btcb2.DefaultDisplayName;
         _network.CurrencyData.Symbol = _network.DisplayName;
         if (ConfiguredByEnvironment)
             return;
@@ -120,34 +150,66 @@ public class ChainSources : IAddressUsageCheck
     public async Task<ChainMonitor> GetMonitorForStoreAsync(string storeId)
     {
         if (!ServerSettings.AllowStoreSources || ConfiguredByEnvironment)
-            return ServerMonitor;
+            return Use(ServerMonitor);
         var store = await GetStoreSettingsAsync(storeId);
         if (store is null || store.Mode == ChainSourceMode.Public)
-            return ServerMonitor;
+            return Use(ServerMonitor);
         try
         {
             var (urls, agreement) = ChainSourceRules.Resolve(store.Mode, store.OwnSources, _network);
-            return GetMonitor(urls, agreement, $"Store: {Describe(store.Mode)}");
+            return GetMonitor(urls, agreement, $"Store: {Describe(store.Mode)}", restricted: true);
         }
         catch (FormatException)
         {
-            return ServerMonitor;
+            return Use(ServerMonitor);
         }
     }
 
-    /// <summary>A monitor for these sources, shared with every store that uses the same ones.</summary>
-    public ChainMonitor GetMonitor(IEnumerable<string> urls, int requiredAgreement, string description)
+    static ChainMonitor Use(ChainMonitor monitor)
+    {
+        monitor.LastUsed = DateTimeOffset.UtcNow;
+        return monitor;
+    }
+
+    /// <summary>
+    /// A monitor for these sources, shared with every store that uses the same ones.
+    /// <paramref name="restricted"/> sources may only connect to public internet addresses.
+    /// </summary>
+    public ChainMonitor GetMonitor(IEnumerable<string> urls, int requiredAgreement, string description, bool restricted = false)
+    {
+        var normalized = Normalize(urls, requiredAgreement);
+        var key = $"{(restricted ? "restricted" : "server")}|{requiredAgreement}|{string.Join("|", normalized.Select(Canonical))}";
+        return Use(_monitors.GetOrAdd(key, _ => CreateMonitor(normalized, requiredAgreement, description, restricted)));
+    }
+
+    /// <summary>A throwaway monitor for testing sources before they are saved. Dispose it after use.</summary>
+    public ChainMonitor CreateTestMonitor(IEnumerable<string> urls, int requiredAgreement, string description, bool restricted) =>
+        CreateMonitor(Normalize(urls, requiredAgreement), requiredAgreement, description, restricted);
+
+    ChainMonitor CreateMonitor(string[] urls, int requiredAgreement, string description, bool restricted) =>
+        new(new ChainSourceSet(urls.Select(u => CreateSource(u, restricted)).ToArray(), requiredAgreement, description),
+            _network, _loggerFactory.CreateLogger<ChainMonitor>());
+
+    static string[] Normalize(IEnumerable<string> urls, int requiredAgreement)
     {
         var normalized = urls.Select(u => u.Trim().TrimEnd('/')).Where(u => u.Length > 0)
-            .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(u => u, StringComparer.OrdinalIgnoreCase).ToArray();
+            .DistinctBy(Canonical).OrderBy(Canonical, StringComparer.Ordinal).ToArray();
         if (normalized.Length == 0)
             throw new FormatException("At least one chain data source is required");
         if (requiredAgreement < 1 || requiredAgreement > normalized.Length)
             throw new FormatException($"Required agreement must be between 1 and {normalized.Length}");
-        var key = $"{requiredAgreement}|{string.Join("|", normalized)}";
-        return _monitors.GetOrAdd(key, _ => new ChainMonitor(
-            new ChainSourceSet(normalized.Select(CreateSource).ToArray(), requiredAgreement, description),
-            _network, _loggerFactory.CreateLogger<ChainMonitor>()));
+        return normalized;
+    }
+
+    /// <summary>Disposes monitors no store has used for an hour, closing their connections.</summary>
+    public void PruneIdleMonitors()
+    {
+        var cutoff = DateTimeOffset.UtcNow - IdleMonitorLifetime;
+        foreach (var (key, monitor) in _monitors.ToArray())
+        {
+            if (monitor != _serverMonitor && monitor.LastUsed < cutoff && _monitors.TryRemove(key, out _))
+                monitor.Dispose();
+        }
     }
 
     /// <exception cref="FormatException">With a message suitable for the user.</exception>
@@ -157,21 +219,41 @@ public class ChainSources : IAddressUsageCheck
             ValidateSource(url);
     }
 
+    /// <summary>
+    /// An explorer URL (http or https, no query, fragment or credentials) or an Electrum server.
+    /// </summary>
     /// <exception cref="FormatException">If the address is not a valid explorer URL or Electrum server.</exception>
     public static void ValidateSource(string url)
     {
         if (ElectrumEndpoint.LooksLikeElectrum(url))
+        {
             ElectrumEndpoint.Parse(url);
-        else if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
+            return;
+        }
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
             throw new FormatException($"'{url}' is not an explorer API URL");
+        if (uri.Query.Length > 0 || uri.Fragment.Length > 0 || uri.UserInfo.Length > 0)
+            throw new FormatException($"'{url}': an explorer API URL can't have a query, fragment or credentials");
     }
 
-    IChainSource CreateSource(string url)
+    /// <summary>One identity per server, however its address is written.</summary>
+    public static string Canonical(string url)
+    {
+        if (ElectrumEndpoint.LooksLikeElectrum(url))
+        {
+            var e = ElectrumEndpoint.Parse(url);
+            return $"{e}{(e.PinnedCertificateSha256 is { } pin ? "#" + Convert.ToHexString(pin) : "")}".ToLowerInvariant();
+        }
+        var uri = new Uri(url.Trim().TrimEnd('/'));
+        return $"{uri.Scheme}://{uri.Host}:{uri.Port}{uri.AbsolutePath.TrimEnd('/')}".ToLowerInvariant();
+    }
+
+    IChainSource CreateSource(string url, bool restricted)
     {
         ValidateSource(url);
         return ElectrumEndpoint.LooksLikeElectrum(url)
-            ? new ElectrumChainSource(new ElectrumClient(ElectrumEndpoint.Parse(url)), _network)
-            : new EsploraChainSource(_httpClientFactory, url);
+            ? new ElectrumChainSource(new ElectrumClient(ElectrumEndpoint.Parse(url), restricted), _network)
+            : new EsploraChainSource(_httpClientFactory, url, restricted);
     }
 
     public async Task<bool> IsUsedAsync(string storeId, string address, CancellationToken cancellationToken) =>

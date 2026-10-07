@@ -32,7 +32,7 @@ public class UIBitcoinBlake2bServerController(Btcb2Network network, ChainSources
             OwnSources = string.Join("\n", settings.OwnSources),
             AllowStoreSources = settings.AllowStoreSources
         };
-        return View(await Fill(vm, test: null));
+        return View(await Fill(vm));
     }
 
     [HttpPost("")]
@@ -40,13 +40,12 @@ public class UIBitcoinBlake2bServerController(Btcb2Network network, ChainSources
     public async Task<IActionResult> ServerSettings(Btcb2ServerSettingsViewModel vm, string command)
     {
         var displayName = vm.DisplayName?.Trim() ?? "";
-        if (displayName.Length is 0 or > 20)
-            ModelState.AddModelError(nameof(vm.DisplayName), "Enter a name of 1 to 20 characters.");
+        if (!Btcb2.IsValidDisplayName(displayName))
+            ModelState.AddModelError(nameof(vm.DisplayName), "Use 1 to 20 letters, digits, spaces, dots, dashes or underscores.");
         else if (ReservedNames.Contains(displayName, StringComparer.OrdinalIgnoreCase))
             ModelState.AddModelError(nameof(vm.DisplayName), "This name would make customers think they should pay in Bitcoin (BTC).");
 
         var own = ChainSources.ParseUrls(vm.OwnSources);
-        ChainMonitor? test = null;
         if (!sources.ConfiguredByEnvironment)
         {
             try
@@ -56,8 +55,9 @@ public class UIBitcoinBlake2bServerController(Btcb2Network network, ChainSources
                     ChainSources.ValidateSource(url);
                 if (command == "test")
                 {
-                    test = sources.GetMonitor(urls, agreement, ChainSources.Describe(vm.Mode));
-                    await test.RefreshAsync(HttpContext.RequestAborted);
+                    using var monitor = sources.CreateTestMonitor(urls, agreement, ChainSources.Describe(vm.Mode), restricted: false);
+                    await monitor.RefreshAsync(HttpContext.RequestAborted);
+                    vm.Test = SourceSetViewModel.From(monitor);
                 }
             }
             catch (FormatException ex)
@@ -66,7 +66,7 @@ public class UIBitcoinBlake2bServerController(Btcb2Network network, ChainSources
             }
         }
         if (!ModelState.IsValid || command == "test")
-            return View(await Fill(vm, test));
+            return View(await Fill(vm));
 
         await sources.SaveServerSettingsAsync(new Btcb2ServerSettings
         {
@@ -86,7 +86,7 @@ public class UIBitcoinBlake2bServerController(Btcb2Network network, ChainSources
         return RedirectToAction(nameof(ServerSettings));
     }
 
-    async Task<Btcb2ServerSettingsViewModel> Fill(Btcb2ServerSettingsViewModel vm, ChainMonitor? test)
+    async Task<Btcb2ServerSettingsViewModel> Fill(Btcb2ServerSettingsViewModel vm)
     {
         var monitor = sources.ServerMonitor;
         if (monitor.LastRefresh is null || monitor.LastRefresh < DateTimeOffset.UtcNow.AddMinutes(-1))
@@ -96,7 +96,6 @@ public class UIBitcoinBlake2bServerController(Btcb2Network network, ChainSources
         vm.PublicRequiredAgreement = network.PublicRequiredAgreement;
         vm.ConfiguredByEnvironment = sources.ConfiguredByEnvironment;
         vm.Current = SourceSetViewModel.From(monitor);
-        vm.Test = test is null ? null : SourceSetViewModel.From(test);
         return vm;
     }
 }

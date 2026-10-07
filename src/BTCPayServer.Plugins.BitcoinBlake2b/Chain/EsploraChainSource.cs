@@ -18,15 +18,20 @@ namespace BTCPayServer.Plugins.BitcoinBlake2b.Chain;
 public class EsploraChainSource : IChainSource
 {
     public const string HttpClientName = "BitcoinBlake2b.Chain";
+    /// <summary>Only connects to public addresses; used for sources chosen by store owners.</summary>
+    public const string RestrictedHttpClientName = "BitcoinBlake2b.Chain.Restricted";
+    public const long MaxResponseBytes = 8 * 1024 * 1024;
     const int MaxPages = 20;
 
     readonly IHttpClientFactory _httpClientFactory;
     readonly string _baseUrl;
+    readonly string _clientName;
 
-    public EsploraChainSource(IHttpClientFactory httpClientFactory, string baseUrl)
+    public EsploraChainSource(IHttpClientFactory httpClientFactory, string baseUrl, bool restricted = false)
     {
         _httpClientFactory = httpClientFactory;
         _baseUrl = baseUrl.TrimEnd('/');
+        _clientName = restricted ? RestrictedHttpClientName : HttpClientName;
         var uri = new Uri(_baseUrl);
         Name = uri.IsDefaultPort ? uri.Host : $"{uri.Host}:{uri.Port}";
     }
@@ -40,7 +45,12 @@ public class EsploraChainSource : IChainSource
     public async Task<string?> CheckCheckpointAsync(ChainCheckpoint checkpoint, CancellationToken cancellationToken)
     {
         var hash = (await GetStringAsync($"/block-height/{checkpoint.Height}", cancellationToken, allowNotFound: true))?.Trim();
-        return string.Equals(hash, checkpoint.BlockHash, StringComparison.OrdinalIgnoreCase) ? null : $"block {checkpoint.Height} is {hash ?? "missing"}";
+        if (string.Equals(hash, checkpoint.BlockHash, StringComparison.OrdinalIgnoreCase))
+            return null;
+        // Only repeat the answer if it is a block hash: never echo arbitrary content from the source.
+        return hash is null ? $"no block {checkpoint.Height}"
+            : IsBlockHash(hash) ? $"block {checkpoint.Height} is {hash}"
+            : $"unexpected answer for block {checkpoint.Height}";
     }
 
     public async Task<int> GetTransactionCountAsync(string address, CancellationToken cancellationToken)
@@ -69,6 +79,8 @@ public class EsploraChainSource : IChainSource
             throw new ChainSourceException($"{Name} returned {txs.Count} of {expected} transactions for {address}");
         return ParseOutputs(txs, address);
     }
+
+    static bool IsBlockHash(string s) => s.Length == 64 && s.All(Uri.IsHexDigit);
 
     static int AddPage(List<JObject> txs, HashSet<string> seen, string? page)
     {
@@ -111,7 +123,7 @@ public class EsploraChainSource : IChainSource
 
     async Task<string?> GetStringAsync(string path, CancellationToken cancellationToken, bool allowNotFound = false)
     {
-        var client = _httpClientFactory.CreateClient(HttpClientName);
+        var client = _httpClientFactory.CreateClient(_clientName);
         using var response = await client.GetAsync(_baseUrl + path, cancellationToken);
         if (allowNotFound && response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.BadRequest)
             return null;
@@ -121,4 +133,11 @@ public class EsploraChainSource : IChainSource
     }
 }
 
-public class ChainSourceException(string message) : Exception(message);
+/// <summary>
+/// A chain data source failed. The message is composed by this plugin and safe to show to
+/// store owners; anything the source itself sent is only in <see cref="Detail"/>, for logs.
+/// </summary>
+public class ChainSourceException(string message, string? detail = null) : Exception(message)
+{
+    public string Detail { get; } = detail ?? message;
+}

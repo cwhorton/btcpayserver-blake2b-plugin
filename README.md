@@ -16,6 +16,7 @@ The plugin installs like any other plugin and **needs no full node**. Payments a
 - **Prices from public exchanges.** NeoxEX (XBT/USDC) and NonKYC (XBT/USDT) are combined and treated as USD.
   - Thin order books are ignored.
   - If the two exchanges disagree by more than 5%, no invoice is priced in XBT.
+  - When one exchange is down, the other is used only if its price is within 5% of the last price both agreed on in the past hour.
   - Other currencies are converted from USD with your store's usual rates.
 - **Stricter confirmation defaults than Bitcoin.** The chain is young and its hashrate can be rented, so a medium speed policy waits for 3 confirmations. You can change this per store.
 - **A configurable display name**, "XBT" by default.
@@ -54,6 +55,8 @@ Your own source is the most private option: public explorers see which addresses
 | Electrum server without TLS (local network only) | `tcp://192.168.1.20:50001` |
 | Electrum server with a self-signed certificate | `ssl://electrs.mynode.local:50002?fingerprint=AB:CD:…` (its SHA-256 fingerprint) |
 
+Sources that store owners enter (when the server admin allows it) must be on the public internet. BTCPay refuses to connect them to private or local addresses. Sources the server admin enters may be on the local network.
+
 Use the BLAKE2b builds of these servers, for example [electrs](https://github.com/jasonsopko/electrs), [Fulcrum](https://github.com/privkeyio/Fulcrum) or [mempool](https://github.com/Retropex/mempool). See [awesome-bitcoin-blake](https://github.com/bitcoin-blake/awesome-bitcoin-blake) for more.
 
 ### Testnet4
@@ -66,7 +69,7 @@ A BTCPay server running on testnet (or regtest) follows **XBT testnet4**, and ma
 | --- | --- |
 | `BTCPAY_BTCB2_CHAIN` | `mainnet` or `testnet4` |
 | `BTCPAY_BTCB2_ESPLORA` | Comma-separated chain data sources. Overrides the admin page and locks it. |
-| `BTCPAY_BTCB2_REQUIRED_AGREEMENT` | How many of those sources must agree (default 1) |
+| `BTCPAY_BTCB2_REQUIRED_AGREEMENT` | How many of those sources must agree (default: 2 when several are set, otherwise 1) |
 | `BTCPAY_BTCB2_POLL_SECONDS` | How often pending invoices are checked (default 15) |
 
 The internal currency code is `BTCB2`, because BTCPay Server treats `XBT` as another name for Bitcoin. Use `BTCB2` for invoices priced directly in XBT and in rate scripts. The default rate rules are:
@@ -83,6 +86,7 @@ Through the Greenfield API, set a store's wallet with
 ## Risks to understand
 
 - **Public sources are trusted parties.** They can be wrong, offline or compromised. Requiring agreement between independent operators reduces this risk without removing it. For larger amounts, run your own source.
+- **A payment stops counting only on positive evidence.** Enough sources must answer and no longer report it; a silent source never counts as evidence. Confirmed payments need every answering source to agree they are gone, over several minutes. Payments that arrive after an invoice expires are still recorded for 3 days and marked as paid late.
 - **The chain is young.** Reorganizations are more likely than on Bitcoin. Raise the confirmation count for large payments.
 - **Prices come from thin markets.** The plugin refuses to price when sources look wrong, but check your invoices.
 - **Replay protection is opt-in on XBT.** Customers should pay from an XBT wallet that uses it. The checkout warns them not to send BTC.

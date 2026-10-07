@@ -1,3 +1,6 @@
+#nullable enable
+using System.Text.RegularExpressions;
+
 namespace BTCPayServer.Plugins.BitcoinBlake2b;
 
 /// <summary>
@@ -14,6 +17,13 @@ public static class Btcb2
     public const string DefaultDisplayName = "XBT";
     public const string ChainName = "Bitcoin BLAKE2b";
     public const int Divisibility = 8;
+
+    /// <summary>
+    /// The display name appears in checkout templates that Vue compiles, so it is limited to
+    /// plain characters: braces or angle brackets could otherwise inject script.
+    /// </summary>
+    public static bool IsValidDisplayName(string? name) =>
+        name is not null && Regex.IsMatch(name, @"^[\p{L}\p{N}][\p{L}\p{N} ._-]{0,19}$");
 
     /// <summary>
     /// The price comes from <see cref="Rates.Btcb2RateProvider"/> in USD. Other currencies are
