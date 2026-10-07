@@ -12,6 +12,9 @@
 #                         server c; 2 must agree); drive them
 #                         with scripts/fake-chain.sh
 #   ./dev.sh real-chain   Restart BTCPay against the real public explorers
+#   ./dev.sh package      Build the Release .btcpay package into .build/packed (what Plugin Builder makes)
+#   ./dev.sh stock        Run the official BTCPay image (no source changes) at http://localhost:14143
+#                         with only the packaged plugin installed
 #   ./dev.sh sdk <cmd>    Run any command in the SDK container
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -57,12 +60,26 @@ case "${1:-}" in
     docker compose --profile fake-chain stop fake-esplora-a fake-esplora-b fake-esplora-c
     docker compose up -d --force-recreate btcpay
     ;;
+  package)
+    sdk bash -c "rm -rf .build/publish .build/packed && \
+      dotnet publish src/$PROJECT/$PROJECT.csproj -c Release -o .build/publish -m:2 && \
+      dotnet run --project submodules/btcpayserver/BTCPayServer.PluginPacker -c Release -- .build/publish $PROJECT .build/packed"
+    find .build/packed -type f
+    ;;
+  stock)
+    pkg=$(find .build/packed -name "$PROJECT.btcpay" | head -1)
+    [ -n "$pkg" ] || { echo "Run ./dev.sh package first" >&2; exit 1; }
+    rm -rf .build/stock-plugins && mkdir -p ".build/stock-plugins/$PROJECT"
+    (cd ".build/stock-plugins/$PROJECT" && unzip -q "$OLDPWD/$pkg")
+    docker compose --profile stock up -d --force-recreate btcpay-stock
+    echo "Stock BTCPay starting at http://localhost:14143 (docker compose logs -f btcpay-stock)"
+    ;;
   sdk)
     shift
     sdk "$@"
     ;;
   *)
-    sed -n '2,15p' "$0"
+    sed -n '2,18p' "$0"
     exit 1
     ;;
 esac

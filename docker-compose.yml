@@ -106,6 +106,28 @@ services:
       - bitcoind
       - postgres
 
+  # The official BTCPay image, unmodified, with only the packaged plugin installed (./dev.sh stock).
+  # Proves the plugin works as a drop-in on a stock server.
+  btcpay-stock:
+    image: btcpayserver/btcpayserver:2.4.5
+    profiles: ["stock"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:14143:49392"
+    environment:
+      BTCPAY_NETWORK: regtest
+      BTCPAY_BIND: 0.0.0.0:49392
+      BTCPAY_CHAINS: btc
+      BTCPAY_BTCEXPLORERURL: http://nbxplorer:32838/
+      BTCPAY_POSTGRES: User ID=postgres;Include Error Detail=true;Host=postgres;Port=5432;Database=btcpaystock
+      BTCPAY_EXPLORERPOSTGRES: User ID=postgres;Include Error Detail=true;Host=postgres;Port=5432;Database=nbxplorer
+      BTCPAY_PLUGINDIR: /plugins
+    volumes:
+      - ./.build/stock-plugins:/plugins
+    depends_on:
+      - postgres
+      - nbxplorer
+
   # Fake XBT chains for local tests (./dev.sh fake-chain), each serving an explorer API on 3002 and
   # Electrum on 50001. Same testnet4 checkpoint as the real chain.
   fake-esplora-a: &fake-esplora

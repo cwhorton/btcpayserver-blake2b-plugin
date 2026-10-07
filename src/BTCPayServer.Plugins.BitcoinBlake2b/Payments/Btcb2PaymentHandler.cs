@@ -72,6 +72,42 @@ public class Btcb2PaymentHandler(Btcb2Network network, AddressAllocator allocato
 
     public void StripDetailsForNonOwner(object details) => ((Btcb2PromptDetails)details).AccountDerivation = null;
 
+    /// <summary>
+    /// For the Greenfield API (PUT /api/v1/stores/{storeId}/payment-methods/BTCB2-CHAIN). The config
+    /// is a wallet key string, or {"walletKey": "...", "confirmationsRequired": 3}. It is parsed and
+    /// checked exactly like the store settings page does.
+    /// </summary>
+    public Task ValidatePaymentMethodConfig(PaymentMethodConfigValidationContext context)
+    {
+        string? walletKey = null;
+        int? confirmations = null;
+        if (context.Config is JValue { Type: JTokenType.String } s)
+            walletKey = s.Value<string>();
+        else if (context.Config is JObject o)
+        {
+            walletKey = o.Value<string>("walletKey") ?? o.Value<string>("accountOriginal") ?? o.Value<string>("accountDerivation");
+            confirmations = o.Value<int?>("confirmationsRequired");
+        }
+        if (confirmations is < 0 or > 100)
+            context.ModelState.AddModelError("config.confirmationsRequired", "Must be between 0 and 100");
+        try
+        {
+            var settings = WalletKey.Parse(walletKey ?? "", network);
+            context.Config = JObject.FromObject(new Btcb2PaymentMethodConfig
+            {
+                AccountDerivation = settings.AccountDerivation.ToString(),
+                AccountOriginal = walletKey!.Trim(),
+                Chain = network.Chain,
+                ConfirmationsRequired = confirmations
+            }, Serializer);
+        }
+        catch (FormatException ex)
+        {
+            context.ModelState.AddModelError("config.walletKey", ex.Message);
+        }
+        return Task.CompletedTask;
+    }
+
     public Btcb2PaymentMethodConfig ParsePaymentMethodConfig(JToken config) =>
         config.ToObject<Btcb2PaymentMethodConfig>(Serializer) ?? throw new FormatException($"Invalid {nameof(Btcb2PaymentMethodConfig)}");
     object IPaymentMethodHandler.ParsePaymentMethodConfig(JToken config) => ParsePaymentMethodConfig(config);

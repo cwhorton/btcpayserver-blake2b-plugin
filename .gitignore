@@ -454,3 +454,6 @@ $RECYCLE.BIN/
 !.vscode/extensions.json
 # Local dev-only credentials (never committed)
 .dev.env
+
+# Packaging and stock-server test output
+.build/
