@@ -2,6 +2,7 @@
 using System;
 using BTCPayServer.Configuration;
 using BTCPayServer.Payments;
+using BTCPayServer.Services.Rates;
 using NBitcoin;
 using NBXplorer;
 
@@ -42,6 +43,16 @@ public class Btcb2Network : BTCPayNetworkBase
     }
 
     public Btcb2Chain Chain { get; }
+
+    /// <summary>Registered with BTCPay; its symbol follows the display name.</summary>
+    public CurrencyData CurrencyData { get; } = new()
+    {
+        Code = Btcb2.CryptoCode,
+        Name = Btcb2.ChainName,
+        Symbol = Btcb2.DefaultDisplayName,
+        Divisibility = Btcb2.Divisibility,
+        Crypto = true
+    };
     public PaymentMethodId PaymentMethodId { get; } = PaymentTypes.CHAIN.GetPaymentMethodId(Btcb2.CryptoCode);
 
     /// <summary>Network used to encode and decode addresses and extended public keys.</summary>

@@ -1,0 +1,7 @@
+@{
+    var isActive = ViewContext.RouteData.Values.TryGetValue("controller", out var controller) && controller?.ToString() == "UIBitcoinBlake2bServer";
+}
+<li>
+    <a id="menu-item-@UIBitcoinBlake2bServerController.MenuItemId" class="dropdown-item@(isActive ? " active" : "")"
+       asp-area="@Plugin.Area" asp-controller="UIBitcoinBlake2bServer" asp-action="ServerSettings">@Btcb2.ChainName</a>
+</li>

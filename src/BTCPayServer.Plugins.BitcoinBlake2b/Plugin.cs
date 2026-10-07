@@ -8,6 +8,7 @@ using BTCPayServer.Plugins.BitcoinBlake2b.Chain;
 using BTCPayServer.Plugins.BitcoinBlake2b.Payments;
 using BTCPayServer.Plugins.BitcoinBlake2b.Rates;
 using BTCPayServer.Plugins.BitcoinBlake2b.Wallet;
+using BTCPayServer.Plugins.Translations;
 using BTCPayServer.Services;
 using BTCPayServer.Services.Rates;
 using Microsoft.Extensions.Configuration;
@@ -37,30 +38,26 @@ public class Plugin : BaseBTCPayServerPlugin
         // Network, currency and pricing
         services.AddSingleton(network);
         services.AddBTCPayNetwork(network);
-        services.AddCurrencyData(new CurrencyData
-        {
-            Code = Btcb2.CryptoCode,
-            Name = Btcb2.ChainName,
-            Symbol = network.DisplayName,
-            Divisibility = Btcb2.Divisibility,
-            Crypto = true
-        });
+        services.AddCurrencyData(network.CurrencyData);
         services.AddHttpClient(HttpQuoteSource.HttpClientName);
         services.AddSingleton<IQuoteSource, NeoxExQuoteSource>();
         services.AddSingleton<IQuoteSource, NonKycQuoteSource>();
         services.AddRateProvider<Btcb2RateProvider>();
 
         // Payment method
-        services.AddDefaultPrettyName(network.PaymentMethodId, network.DisplayName);
+        // The display name is the admin's choice, loaded at startup (see Btcb2DisplayName.cs).
+        services.AddSingleton(_ => new PrettyNameProvider.UntranslatedPrettyName(network.PaymentMethodId, network.DisplayName));
+        services.AddSingleton<IDefaultTranslationProvider, Btcb2TranslationProvider>();
+        services.AddSingleton<IGlobalCheckoutModelExtension, Btcb2GlobalCheckoutExtension>();
         services.AddTransactionLinkProvider(network.PaymentMethodId, new DefaultTransactionLinkProvider(network.ExplorerTxLink));
         services.AddHttpClient(EsploraChainSource.HttpClientName, c =>
         {
             c.Timeout = TimeSpan.FromSeconds(15);
             c.DefaultRequestHeaders.UserAgent.ParseAdd("BTCPayServer-BitcoinBlake2b");
         });
-        services.AddSingleton(p => new ChainSources(p.GetRequiredService<IHttpClientFactory>(), network, config["BTCB2_ESPLORA"], config["BTCB2_REQUIRED_AGREEMENT"]));
-        services.AddSingleton<ChainMonitor>();
-        services.AddSingleton<IAddressUsageCheck>(p => p.GetRequiredService<ChainMonitor>());
+        services.AddSingleton(p => ActivatorUtilities.CreateInstance<ChainSources>(p, config["BTCB2_ESPLORA"] ?? "", config["BTCB2_REQUIRED_AGREEMENT"] ?? ""));
+        services.AddSingleton<IAddressUsageCheck>(p => p.GetRequiredService<ChainSources>());
+        services.AddHostedService<Btcb2SettingsLoader>();
         services.AddSingleton<AddressAllocator>();
         services.AddSingleton<Btcb2PaymentHandler>();
         services.AddSingleton<IPaymentMethodHandler>(p => p.GetRequiredService<Btcb2PaymentHandler>());
@@ -72,6 +69,7 @@ public class Plugin : BaseBTCPayServerPlugin
 
         // UI
         services.AddUIExtension("store-wallets-nav", $"{ViewsDirectory}/NavExtension.cshtml");
+        services.AddUIExtension("server-nav", $"{ViewsDirectory}/ServerNavExtension.cshtml");
         services.AddUIExtension("checkout-end", $"{ViewsDirectory}/CheckoutBody.cshtml");
     }
 }

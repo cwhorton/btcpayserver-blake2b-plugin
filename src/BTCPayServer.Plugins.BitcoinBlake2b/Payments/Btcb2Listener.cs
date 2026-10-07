@@ -25,7 +25,7 @@ namespace BTCPayServer.Plugins.BitcoinBlake2b.Payments;
 public class Btcb2Listener(
     Btcb2Network network,
     Btcb2PaymentHandler handler,
-    ChainMonitor monitor,
+    ChainSources sources,
     InvoiceRepository invoiceRepository,
     PaymentService paymentService,
     EventAggregator eventAggregator,
@@ -67,31 +67,50 @@ public class Btcb2Listener(
     public async Task PollAsync(CancellationToken cancellationToken)
     {
         var invoices = await invoiceRepository.GetMonitoredInvoices(network.PaymentMethodId, cancellationToken);
-        if (invoices.Length == 0 && DateTimeOffset.UtcNow - _lastRefresh < IdleRefresh)
+        var idleRefreshDue = DateTimeOffset.UtcNow - _lastRefresh >= IdleRefresh;
+        if (invoices.Length == 0 && !idleRefreshDue)
             return;
-        await monitor.RefreshAsync(cancellationToken);
-        _lastRefresh = DateTimeOffset.UtcNow;
-        if (!monitor.IsAvailable)
-        {
-            if (invoices.Length > 0)
-                logger.LogWarning("Not enough XBT chain data sources available ({Healthy} of {Required} required); payments are not being updated",
-                    monitor.Healthy.Count, monitor.Set.RequiredAgreement);
-            return;
-        }
+
+        // Each store's invoices are checked against that store's sources; each set of sources is refreshed once.
+        var groups = new Dictionary<ChainMonitor, List<InvoiceEntity>>();
         foreach (var invoice in invoices)
         {
-            try
+            var monitor = await sources.GetMonitorForStoreAsync(invoice.StoreId);
+            if (!groups.TryGetValue(monitor, out var list))
+                groups[monitor] = list = [];
+            list.Add(invoice);
+        }
+        if (idleRefreshDue)
+        {
+            groups.TryAdd(sources.ServerMonitor, []);
+            _lastRefresh = DateTimeOffset.UtcNow;
+        }
+        await Task.WhenAll(groups.Keys.Select(m => m.RefreshAsync(cancellationToken)));
+
+        foreach (var (monitor, group) in groups)
+        {
+            if (!monitor.IsAvailable)
             {
-                await UpdateInvoiceAsync(invoice, cancellationToken);
+                if (group.Count > 0)
+                    logger.LogWarning("Not enough XBT chain data sources available for {Sources} ({Healthy} of {Required} required); {Count} invoice(s) not updated",
+                        monitor.Set.Description, monitor.Healthy.Count, monitor.Set.RequiredAgreement, group.Count);
+                continue;
             }
-            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            foreach (var invoice in group)
             {
-                logger.LogError(ex, "Error while checking XBT payments of invoice {InvoiceId}", invoice.Id);
+                try
+                {
+                    await UpdateInvoiceAsync(invoice, monitor, cancellationToken);
+                }
+                catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+                {
+                    logger.LogError(ex, "Error while checking XBT payments of invoice {InvoiceId}", invoice.Id);
+                }
             }
         }
     }
 
-    async Task UpdateInvoiceAsync(InvoiceEntity invoice, CancellationToken cancellationToken)
+    async Task UpdateInvoiceAsync(InvoiceEntity invoice, ChainMonitor monitor, CancellationToken cancellationToken)
     {
         var pmi = network.PaymentMethodId;
         var prompt = invoice.GetPaymentPrompt(pmi);

@@ -1,3 +1,4 @@
+@using BTCPayServer.Plugins.BitcoinBlake2b.Chain
 @model Btcb2WalletViewModel
 @{
     ViewData.SetLayoutModel(new LayoutModel(UIBitcoinBlake2bStoreController.MenuItemId, $"{Model.DisplayName} wallet"));
@@ -119,3 +120,48 @@
         }
     </div>
 </div>
+
+@if (Model.Sources is not null)
+{
+    <div class="row mt-5">
+        <div class="col-xl-8">
+            <h3 class="mb-3">Chain data sources</h3>
+            <p class="text-secondary">The servers BTCPay asks about this store's @Model.DisplayName payments.</p>
+            @if (Model.CanChooseSources)
+            {
+                <form method="post" asp-action="UpdateSources" asp-route-storeId="@storeId" class="mb-4">
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="radio" name="sourceMode" value="@ChainSourceMode.Public" id="StoreModePublic" checked="@(Model.SourceMode == ChainSourceMode.Public)" />
+                        <label class="form-check-label" for="StoreModePublic">Use this server's sources</label>
+                    </div>
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="radio" name="sourceMode" value="@ChainSourceMode.Own" id="StoreModeOwn" checked="@(Model.SourceMode == ChainSourceMode.Own)" />
+                        <label class="form-check-label" for="StoreModeOwn">My own sources only, trusted on their own</label>
+                    </div>
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="radio" name="sourceMode" value="@ChainSourceMode.OwnWithPublicCheck" id="StoreModeOwnWithPublicCheck" checked="@(Model.SourceMode == ChainSourceMode.OwnWithPublicCheck)" />
+                        <label class="form-check-label" for="StoreModeOwnWithPublicCheck">My own sources, cross-checked with the public explorers (any two must agree)</label>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="ownSources">My own sources, one per line</label>
+                        <textarea class="form-control font-monospace" id="ownSources" name="ownSources" rows="3" spellcheck="false"
+                                  placeholder="https://mempool.mynode.local/api&#10;ssl://electrs.mynode.local:50002">@Model.OwnSources</textarea>
+                        <div class="form-text">
+                            An explorer API URL (<code>https://host/api</code>) or an Electrum server (<code>ssl://host:50002</code>, <code>tcp://host:50001</code>).
+                            For a self-signed certificate: <code>ssl://host:50002?fingerprint=AB:CD:…</code>
+                        </div>
+                    </div>
+                    <button type="submit" name="command" value="test" class="btn btn-secondary" id="TestStoreSources">Test sources</button>
+                    <button type="submit" name="command" value="save" class="btn btn-primary" id="SaveStoreSources">Save sources</button>
+                </form>
+                @if (Model.TestSources is not null)
+                {
+                    <h4 class="mb-2">Test results</h4>
+                    <partial name="_SourceStatus" model="Model.TestSources" />
+                }
+            }
+            <h4 class="mt-4 mb-2">In use now: @Model.Sources.Description</h4>
+            <partial name="_SourceStatus" model="Model.Sources" />
+        </div>
+    </div>
+}

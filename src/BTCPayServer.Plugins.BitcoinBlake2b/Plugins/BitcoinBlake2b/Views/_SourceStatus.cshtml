@@ -1,0 +1,45 @@
+@model SourceSetViewModel
+<div class="table-responsive">
+    <table class="table table-hover mb-1" data-testid="BitcoinBlake2b-SourceStatus">
+        <thead>
+            <tr>
+                <th>Source</th>
+                <th>Status</th>
+                <th class="text-end">Block height</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var source in Model.Sources)
+            {
+                <tr>
+                    <td>
+                        <span class="font-monospace small">@source.Url</span>
+                    </td>
+                    <td>
+                        <span class="me-1 btcpay-status btcpay-status--@(source.Healthy ? "enabled" : source.State == "Not checked yet" ? "pending" : "disabled")"></span>
+                        @source.State
+                        @if (!source.Healthy && source.Error is not null)
+                        {
+                            <div class="text-secondary small text-break">@source.Error</div>
+                        }
+                    </td>
+                    <td class="text-end">@source.TipHeight</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+<p class="form-text mb-0">
+    @if (Model.RequiredAgreement > 1)
+    {
+        <span>@Model.RequiredAgreement sources must agree before a payment counts.</span>
+    }
+    else
+    {
+        <span>Any one working source is trusted on its own.</span>
+    }
+    @if (!Model.Available)
+    {
+        <strong class="text-danger">Not enough sources are working, so new invoices can't offer this payment method.</strong>
+    }
+</p>

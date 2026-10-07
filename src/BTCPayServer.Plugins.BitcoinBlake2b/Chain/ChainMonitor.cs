@@ -1,23 +1,21 @@
 #nullable enable
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using BTCPayServer.Payments;
-using BTCPayServer.Plugins.BitcoinBlake2b.Wallet;
 using Microsoft.Extensions.Logging;
 
 namespace BTCPayServer.Plugins.BitcoinBlake2b.Chain;
 
 /// <summary>
-/// Tracks the health of every chain data source and answers questions about addresses by
-/// asking all healthy sources. A source is used only after it proves it follows the
+/// Tracks the health of a set of chain data sources and answers questions about addresses by
+/// asking all its healthy sources. A source is used only after it proves it follows the
 /// Bitcoin BLAKE2b chain: XBT and BTC share addresses, so a BTC explorer would otherwise
 /// report real BTC payments as XBT.
 /// </summary>
-public class ChainMonitor(ChainSources sources, Btcb2Network network, ILogger<ChainMonitor> logger) : IAddressUsageCheck
+public class ChainMonitor(ChainSourceSet set, Btcb2Network network, ILogger<ChainMonitor> logger)
 {
     static readonly TimeSpan CheckpointRecheck = TimeSpan.FromHours(1);
     static readonly TimeSpan TipMaxAge = TimeSpan.FromMinutes(5);
@@ -33,11 +31,10 @@ public class ChainMonitor(ChainSources sources, Btcb2Network network, ILogger<Ch
         public bool IsHealthy => OnChain == true && Error is null && TipCheckedAt > DateTimeOffset.UtcNow - TipMaxAge;
     }
 
-    readonly ConcurrentDictionary<IChainSource, SourceState> _states = new();
-    ChainSourceSet? _set;
+    readonly SourceState[] _states = set.Sources.Select(s => new SourceState(s)).ToArray();
 
-    public ChainSourceSet Set => sources.Current;
-    public IReadOnlyList<SourceState> States => Set.Sources.Select(s => _states.GetOrAdd(s, x => new SourceState(x))).ToArray();
+    public ChainSourceSet Set => set;
+    public IReadOnlyList<SourceState> States => _states;
     public IReadOnlyList<SourceState> Healthy => States.Where(s => s.IsHealthy).ToArray();
     public bool IsAvailable => Healthy.Count >= Set.RequiredAgreement;
     public DateTimeOffset? LastRefresh { get; private set; }
@@ -45,13 +42,7 @@ public class ChainMonitor(ChainSources sources, Btcb2Network network, ILogger<Ch
     /// <summary>Verifies each source is on the XBT chain (hourly) and updates its chain tip.</summary>
     public async Task RefreshAsync(CancellationToken cancellationToken)
     {
-        var set = Set;
-        if (!ReferenceEquals(set, _set))
-        {
-            _states.Clear();
-            _set = set;
-        }
-        await Task.WhenAll(States.Select(s => RefreshAsync(s, cancellationToken)));
+        await Task.WhenAll(_states.Select(s => RefreshAsync(s, cancellationToken)));
         LastRefresh = DateTimeOffset.UtcNow;
     }
 

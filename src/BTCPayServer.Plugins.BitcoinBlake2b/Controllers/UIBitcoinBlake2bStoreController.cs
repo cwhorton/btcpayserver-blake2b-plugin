@@ -6,6 +6,7 @@ using BTCPayServer.Abstractions.Extensions;
 using BTCPayServer.Abstractions.Models;
 using BTCPayServer.Client;
 using BTCPayServer.Data;
+using BTCPayServer.Plugins.BitcoinBlake2b.Chain;
 using BTCPayServer.Plugins.BitcoinBlake2b.Payments;
 using BTCPayServer.Plugins.BitcoinBlake2b.Wallet;
 using BTCPayServer.Services.Stores;
@@ -21,6 +22,7 @@ public class UIBitcoinBlake2bStoreController(
     Btcb2Network network,
     Btcb2PaymentHandler handler,
     AddressAllocator allocator,
+    ChainSources sources,
     StoreRepository storeRepository) : Controller
 {
     public const string MenuItemId = "BitcoinBlake2b-Wallet";
@@ -31,6 +33,10 @@ public class UIBitcoinBlake2bStoreController(
     public async Task<IActionResult> Settings()
     {
         var vm = new Btcb2WalletViewModel { DisplayName = network.DisplayName, Chain = network.Chain };
+        var storeSources = await sources.GetStoreSettingsAsync(Store.Id);
+        vm.SourceMode = storeSources?.Mode ?? ChainSourceMode.Public;
+        vm.OwnSources = string.Join("\n", storeSources?.OwnSources ?? []);
+        await FillSources(vm, test: null);
         var config = GetConfig();
         if (config is not null)
         {
@@ -46,15 +52,77 @@ public class UIBitcoinBlake2bStoreController(
                 vm.NextIndex = await allocator.GetNextIndexAsync(Store.Id, config.AccountDerivation);
             }
         }
-        return View(vm);
+        return View(nameof(Settings), vm);
+    }
+
+    [HttpPost("sources")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> UpdateSources(ChainSourceMode sourceMode, string? ownSources, string command)
+    {
+        var store = Store;
+        if (!sources.ServerSettings.AllowStoreSources || sources.ConfiguredByEnvironment)
+            return RedirectToAction(nameof(Settings), new { storeId = store.Id });
+        var own = ChainSources.ParseUrls(ownSources);
+        try
+        {
+            var (urls, agreement) = ChainSourceRules.Resolve(sourceMode, own, network);
+            foreach (var url in urls)
+                ChainSources.ValidateSource(url);
+            if (command == "test")
+            {
+                var vm = new Btcb2WalletViewModel { SourceMode = sourceMode, OwnSources = ownSources };
+                var test = sources.GetMonitor(urls, agreement, ChainSources.Describe(sourceMode));
+                await test.RefreshAsync(HttpContext.RequestAborted);
+                await FillSources(vm, test);
+                return await SettingsWith(vm);
+            }
+            await sources.SaveStoreSettingsAsync(store.Id, sourceMode == ChainSourceMode.Public ? null : new Btcb2StoreSourceSettings { Mode = sourceMode, OwnSources = own });
+        }
+        catch (FormatException ex)
+        {
+            TempData.SetStatusMessageModel(new StatusMessageModel { Severity = StatusMessageModel.StatusSeverity.Error, Message = ex.Message });
+            return RedirectToAction(nameof(Settings), new { storeId = store.Id });
+        }
+        var monitor = await sources.GetMonitorForStoreAsync(store.Id);
+        await monitor.RefreshAsync(HttpContext.RequestAborted);
+        TempData.SetStatusMessageModel(new StatusMessageModel
+        {
+            Severity = monitor.IsAvailable ? StatusMessageModel.StatusSeverity.Success : StatusMessageModel.StatusSeverity.Warning,
+            Message = monitor.IsAvailable
+                ? "Chain data sources saved. They apply to new and pending invoices."
+                : $"Chain data sources saved, but not enough of them are working: {network.DisplayName} can't be offered at checkout until they are."
+        });
+        return RedirectToAction(nameof(Settings), new { storeId = store.Id });
+    }
+
+    /// <summary>The settings page with the wallet part filled in, keeping the given sources form.</summary>
+    async Task<IActionResult> SettingsWith(Btcb2WalletViewModel sourcesForm)
+    {
+        var page = (ViewResult)await Settings();
+        var vm = (Btcb2WalletViewModel)page.Model!;
+        vm.SourceMode = sourcesForm.SourceMode;
+        vm.OwnSources = sourcesForm.OwnSources;
+        vm.TestSources = sourcesForm.TestSources;
+        return page;
+    }
+
+    async Task FillSources(Btcb2WalletViewModel vm, ChainMonitor? test)
+    {
+        var monitor = await sources.GetMonitorForStoreAsync(Store.Id);
+        if (monitor.LastRefresh is null || monitor.LastRefresh < DateTimeOffset.UtcNow.AddMinutes(-1))
+            await monitor.RefreshAsync(HttpContext.RequestAborted);
+        vm.Sources = SourceSetViewModel.From(monitor);
+        vm.CanChooseSources = sources.ServerSettings.AllowStoreSources && !sources.ConfiguredByEnvironment;
+        vm.TestSources = test is null ? vm.TestSources : SourceSetViewModel.From(test);
     }
 
     [HttpPost("preview")]
     [ValidateAntiForgeryToken]
-    public IActionResult Preview(Btcb2WalletViewModel vm)
+    public async Task<IActionResult> Preview(Btcb2WalletViewModel vm)
     {
         vm.DisplayName = network.DisplayName;
         vm.Chain = network.Chain;
+        await FillSources(vm, test: null);
         try
         {
             var settings = WalletKey.Parse(vm.WalletKey ?? "", network);
@@ -79,14 +147,14 @@ public class UIBitcoinBlake2bStoreController(
         catch (FormatException ex)
         {
             ModelState.AddModelError(nameof(vm.WalletKey), ex.Message);
-            return Preview(vm);
+            return await Preview(vm);
         }
         if (!vm.ConfirmAddressesMatch)
             ModelState.AddModelError(nameof(vm.ConfirmAddressesMatch), "Check that these addresses match your wallet's receive addresses.");
         if (!vm.ConfirmDedicatedWallet)
             ModelState.AddModelError(nameof(vm.ConfirmDedicatedWallet), "Confirm that this wallet is used only for XBT.");
         if (!ModelState.IsValid)
-            return Preview(vm);
+            return await Preview(vm);
 
         var store = Store;
         store.SetPaymentMethodConfig(handler, new Btcb2PaymentMethodConfig
@@ -172,6 +240,13 @@ public class Btcb2WalletViewModel
     public bool Enabled { get; set; }
     public int? ConfirmationsRequired { get; set; }
     public int SpeedPolicyConfirmations { get; set; }
+
+    // Chain data sources
+    public SourceSetViewModel? Sources { get; set; }
+    public SourceSetViewModel? TestSources { get; set; }
+    public bool CanChooseSources { get; set; }
+    public ChainSourceMode SourceMode { get; set; }
+    public string? OwnSources { get; set; }
 
     // Setting up a wallet
     public string? WalletKey { get; set; }

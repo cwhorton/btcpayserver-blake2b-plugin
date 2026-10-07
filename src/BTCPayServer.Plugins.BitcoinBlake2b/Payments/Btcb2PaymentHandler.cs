@@ -12,7 +12,7 @@ using Newtonsoft.Json.Linq;
 
 namespace BTCPayServer.Plugins.BitcoinBlake2b.Payments;
 
-public class Btcb2PaymentHandler(Btcb2Network network, AddressAllocator allocator, ChainMonitor monitor) : IPaymentMethodHandler
+public class Btcb2PaymentHandler(Btcb2Network network, AddressAllocator allocator, ChainSources sources) : IPaymentMethodHandler
 {
     /// <summary>Outputs below this are non-standard on Bitcoin-derived chains.</summary>
     static readonly decimal DustThreshold = Money.Satoshis(546).ToDecimal(MoneyUnit.BTC);
@@ -50,6 +50,7 @@ public class Btcb2PaymentHandler(Btcb2Network network, AddressAllocator allocato
             throw new PaymentMethodUnavailableException("Amount is below the dust threshold");
 
         // Never create an invoice that cannot be monitored.
+        var monitor = await sources.GetMonitorForStoreAsync(context.Store.Id);
         if (!monitor.IsAvailable)
             await monitor.RefreshAsync(CancellationToken.None);
         if (!monitor.IsAvailable)

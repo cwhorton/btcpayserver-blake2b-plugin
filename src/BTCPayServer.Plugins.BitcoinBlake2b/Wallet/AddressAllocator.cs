@@ -9,10 +9,10 @@ using NBXplorer.DerivationStrategy;
 
 namespace BTCPayServer.Plugins.BitcoinBlake2b.Wallet;
 
-/// <summary>Reports whether an address already has transactions on chain.</summary>
+/// <summary>Reports whether an address already has transactions on chain, as seen by the store's sources.</summary>
 public interface IAddressUsageCheck
 {
-    Task<bool> IsUsedAsync(string address, CancellationToken cancellationToken);
+    Task<bool> IsUsedAsync(string storeId, string address, CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -51,7 +51,7 @@ public class AddressAllocator(
                 var address = WalletKey.DeriveReceiveAddress(strategy, index, network);
                 if (await invoiceRepository.GetInvoiceFromAddress(network.PaymentMethodId, address.ToString()) is not null)
                     continue;
-                if (await usageCheck.IsUsedAsync(address.ToString(), cancellationToken))
+                if (await usageCheck.IsUsedAsync(storeId, address.ToString(), cancellationToken))
                     continue;
                 await storeRepository.UpdateSetting(storeId, SettingName, new IndexState { AccountDerivation = key, NextIndex = index + 1 });
                 return (address, index);
