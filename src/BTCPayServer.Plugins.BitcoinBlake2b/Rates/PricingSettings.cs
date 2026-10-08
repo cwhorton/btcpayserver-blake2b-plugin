@@ -1,5 +1,6 @@
 #nullable enable
 using System;
+using Newtonsoft.Json;
 
 namespace BTCPayServer.Plugins.BitcoinBlake2b.Rates;
 
@@ -16,7 +17,9 @@ public class Btcb2PricingSettings
     /// </summary>
     public decimal MaxDivergencePercent { get; set; } = 5m;
 
+    [JsonIgnore]
     public decimal MaxSpread => MaxSpreadPercent / 100m;
+    [JsonIgnore]
     public decimal MaxDivergence => MaxDivergencePercent / 100m;
 
     public const decimal MinLimitPercent = 0.5m;

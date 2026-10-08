@@ -211,7 +211,10 @@
             }
             else if (!Model.CanChooseSources)
             {
-                <p class="text-secondary">This server's admin chooses these sources.</p>
+                <p class="text-secondary">
+                    This server's admin chooses these sources. To use your own explorer or Electrum server instead,
+                    ask them to let store owners choose their own chain data sources.
+                </p>
             }
             @if (Model.CanChooseSources)
             {
