@@ -1,56 +1,97 @@
 # Bitcoin BLAKE2b (XBT) for BTCPay Server
 
-**Status: beta. Tested on testnet4 and against simulated chains, not yet with real mainnet payments. Use small amounts.**
+Accept **Bitcoin BLAKE2b (XBT)** payments in your BTCPay Server store, without running an XBT node.
 
-Accept Bitcoin BLAKE2b (XBT, also traded as BTCB2) in BTCPay Server. XBT is the chain that forked from Bitcoin at block 961,640 (August 30, 2026) and switched to BLAKE2b proof of work.
+<p>
+  <img src="docs/screenshots/checkout.png" width="280" alt="Checkout asking for 0.0266 XBT, with QR code, address and a warning to send only XBT">
+  &nbsp;
+  <img src="docs/screenshots/checkout-paid.png" width="280" alt="The same checkout after payment: Invoice Paid">
+</p>
 
-The plugin installs like any other plugin and **needs no full node**. Payments are detected through public block explorers, or through your own explorer or Electrum server.
+**Status: beta (v0.1.0).** It has been verified with a real mainnet payment, on testnet4, and against simulated chains with reorganizations and outages. It has not been independently audited, so start with small amounts.
 
-## What it does
+## What it is
 
-- **On-chain XBT payments** with a new address for every invoice, from a watch-only wallet key. BTCPay never holds your spending keys.
-- **Payment detection through chain data sources:** mempool/Esplora explorers and Electrum servers (electrs, Fulcrum).
-  - By default it uses three independently run public explorers, and two of them must agree before a payment counts.
-  - You can use your own explorer or Electrum server instead, or cross-check yours against the public ones.
-- **Protection against the wrong chain.** XBT and Bitcoin addresses are identical, so every source must prove it follows the BLAKE2b chain before it's used. A Bitcoin explorer is rejected, so real BTC is never counted as XBT.
-- **Prices from public exchanges, with the details shown.** NeoxEX (XBT/USDC) and NonKYC (XBT/USDT) are combined and treated as USD. Both plugin pages show each exchange's live bid and ask, whether it was used and why not, and the resulting price.
-  - Thin order books are ignored, and if the exchanges disagree too much no invoice is priced in XBT. The server admin chooses the exchanges and both limits.
-  - When one exchange is down, the other is used only if its price is close to the last price both agreed on in the past hour.
-  - Each store can add an **XBT price adjustment**, for example +2% to cover price swings, or a negative number for a discount. The store page shows the exact price its invoices will use.
-  - Other currencies are converted from USD with your store's usual rates, and BTCPay's store spread still applies.
-- **Stricter confirmation defaults than Bitcoin.** The chain is young and its hashrate can be rented, so a medium speed policy waits for 3 confirmations. You can change this per store.
-- **A configurable display name**, "XBT" by default.
+XBT (also traded as BTCB2) is the chain that forked from Bitcoin at block 961,640 on August 30, 2026, when it switched to BLAKE2b proof of work. Its addresses, wallets and transactions work like Bitcoin's, but it is a separate coin on a separate chain.
+
+This plugin adds XBT as a payment method in BTCPay Server:
+
+- **No node needed.** Payments are detected through block explorers and Electrum servers: independent public ones by default, or your own.
+- **Your keys stay with you.** You give BTCPay a watch-only key from your XBT wallet. Every invoice gets a fresh address from it, and payments go straight to your wallet.
+- **Fair prices.** XBT is priced from live exchange order books, with safety checks, and you can see exactly where each price comes from.
+- **Built for a young chain.** Two independent explorers must agree before a payment counts, every source must prove it follows the XBT chain and not Bitcoin, and invoices wait for more confirmations than Bitcoin's defaults.
 
 Not included: Lightning, refunds and payouts, and spending from BTCPay. Send from your own XBT wallet.
 
 ## Before you start: use a dedicated wallet
 
-**XBT addresses look exactly like Bitcoin addresses, and the same keys control coins on both chains.** Create a new wallet just for XBT in an XBT-capable wallet, such as the [Sparrow BLAKE2b build](https://github.com/paulscode/sparrow/releases). Never use the wallet that holds your BTC.
+**XBT addresses look exactly like Bitcoin addresses, and the same keys control coins on both chains.** Create a wallet used only for XBT in an XBT-capable wallet, such as the [Sparrow BLAKE2b build](https://github.com/paulscode/sparrow/releases). Never use the wallet that holds your BTC.
 
-## Setup
+## Install
 
-1. **Install:** in BTCPay go to *Server settings → Plugins*, install **Bitcoin BLAKE2b (XBT)**, then restart BTCPay.
-2. **Add your wallet:**
-   - Open your store, then *Wallets → XBT*.
-   - Paste your wallet's account public key (zpub, ypub or xpub) or its output descriptor.
-   - Click *Preview addresses* and compare the addresses with your wallet's first receive addresses.
-   - Confirm both checkboxes and save.
-3. **Optional, choose sources, pricing and name:** go to *Server settings → Bitcoin BLAKE2b*. There you can:
-   - choose which chain data sources to use, and test them;
-   - choose which exchanges price XBT, and their safety limits;
-   - change the display name;
-   - let store owners use their own sources.
+You need BTCPay Server **2.4.5 or later** and a server admin account.
 
-   On the store's *Wallets → XBT* page, set the store's XBT price adjustment.
-4. **Test it:** create a small invoice and pay it from your XBT wallet.
+1. Download **`BTCPayServer.Plugins.BitcoinBlake2b.btcpay`** from the [latest release](https://github.com/cwhorton/btcpayserver-blake2b-plugin/releases/latest). Keep the file name as it is: BTCPay uses it to identify the plugin.
+2. In BTCPay, open *Server settings → Plugins* and click **Upload plugin**. Choose the file and upload it.
+3. When BTCPay says "Files uploaded, restart server to load plugins", restart BTCPay, for example from *Server settings → Maintenance*.
 
-Set your wallet's **gap limit** well above the number of unpaid invoices you expect, for example 100. Otherwise the wallet may not show payments to later addresses. Every invoice uses a new address, including invoices that are never paid.
+A BTCPay server on mainnet accepts XBT mainnet. A testnet or regtest server follows XBT testnet4.
+
+## Set up a store
+
+### 1. Add your XBT wallet
+
+Open your store and go to **Wallets → XBT**. Paste your wallet's account public key (zpub, ypub or xpub) or its output descriptor, then click **Preview addresses**. Check that the addresses match the first receive addresses in your wallet, confirm both boxes, and save.
+
+<img src="docs/screenshots/wallet-setup.png" width="640" alt="Wallet setup: the pasted zpub, five previewed receive addresses, and two confirmation checkboxes">
+
+Set your wallet's **gap limit** well above the number of unpaid invoices you expect, for example 100. Every invoice uses a new address, including invoices that are never paid, and a wallet with a small gap limit may not show payments to later addresses.
+
+### 2. Check the store's XBT page
+
+The same page then shows:
+
+- your wallet's first receive addresses;
+- whether XBT is offered at checkout;
+- how many confirmations settle an invoice. The default follows your store's speed policy but is stricter than Bitcoin's (1, 3, 6 or 12), and you can set your own number.
+- the **Pricing** of your invoices;
+- the **chain data sources** that watch for your payments.
+
+<img src="docs/screenshots/store-wallet.png" width="760" alt="The store's XBT wallet page: current wallet, addresses, settings, pricing and chain data sources">
+
+### 3. Pricing
+
+XBT is priced from the live order books of **NeoxEX** (XBT/USDC) and **NonKYC** (XBT/USDT), with USDC and USDT counted as US dollars. The Pricing section shows each exchange's bid and ask, whether it was used (or why not), and the exact rate your invoices will use.
+
+<img src="docs/screenshots/pricing.png" width="640" alt="Pricing: both exchanges' bid and ask, the exchange price, this store's price, and the XBT price adjustment">
+
+- **XBT price adjustment:** charge XBT payers a little more, for example +2% to cover price swings before you sell, or give a discount with a negative number.
+- **Safety checks.** Thin order books (a wide gap between buy and sell offers) are ignored. If the two exchanges disagree too much, XBT is not offered rather than mispriced. When one exchange is down, the other is used only while its price stays close to the last price both agreed on.
+- **Other currencies** are converted from USD with your store's usual rates, and BTCPay's store spread (*Settings → Rates*) still applies.
+
+### 4. Your customers' checkout
+
+Customers see the amount in XBT, a QR code, the address, and a warning not to send BTC. There is deliberately no "pay in wallet" button: a `bitcoin:` link would open a Bitcoin wallet. Once enough sources agree on the payment and it has the required confirmations, the invoice is paid (see the screenshots at the top).
+
+## Server settings
+
+Server admins find the plugin under **Server settings → Bitcoin BLAKE2b**:
+
+- **Display name:** "XBT" by default.
+- **Chain data sources:**
+  - public explorers (default; 2 of 3 must agree);
+  - your own explorers or Electrum servers only;
+  - or your own sources cross-checked with the public ones.
+
+  **Test sources** shows whether each one works and follows the XBT chain.
+- **Pricing:** which exchanges to use, and the spread and disagreement limits.
+- **Stores:** whether store owners may enter their own chain data sources.
+
+<img src="docs/screenshots/server-settings.png" width="760" alt="Server settings: display name, chain data sources with live status, pricing and store permissions">
 
 ### Using your own explorer or Electrum server
 
-Your own source is the most private option: public explorers see which addresses you watch.
-
-To use it, go to *Server settings → Bitcoin BLAKE2b → Chain data sources*. Choose **My own sources only**, which turns the public explorers off, or **My own sources, cross-checked with the public explorers**. Then enter your sources, click *Test sources*, and save. Enter any of these:
+Your own source is the most private option: public explorers see which addresses you watch. Choose **My own sources only**, which turns the public explorers off, or **My own sources, cross-checked with the public explorers**. Then enter your sources one per line, click **Test sources**, and save.
 
 | Source | Example |
 | --- | --- |
@@ -59,19 +100,15 @@ To use it, go to *Server settings → Bitcoin BLAKE2b → Chain data sources*. C
 | Electrum server without TLS (local network only) | `tcp://192.168.1.20:50001` |
 | Electrum server with a self-signed certificate | `ssl://electrs.mynode.local:50002?fingerprint=AB:CD:…` (its SHA-256 fingerprint) |
 
-Sources that store owners enter (when the server admin allows it) must be on the public internet. BTCPay refuses to connect them to private or local addresses. Sources the server admin enters may be on the local network.
+Use the BLAKE2b builds of these servers, for example [electrs](https://github.com/jasonsopko/electrs), [Fulcrum](https://github.com/privkeyio/Fulcrum) or [mempool](https://github.com/Retropex/mempool); [awesome-bitcoin-blake](https://github.com/bitcoin-blake/awesome-bitcoin-blake) lists more. Any source that answers for the Bitcoin chain instead of XBT is rejected automatically.
 
-Use the BLAKE2b builds of these servers, for example [electrs](https://github.com/jasonsopko/electrs), [Fulcrum](https://github.com/privkeyio/Fulcrum) or [mempool](https://github.com/Retropex/mempool). See [awesome-bitcoin-blake](https://github.com/bitcoin-blake/awesome-bitcoin-blake) for more.
-
-### Testnet4
-
-A BTCPay server running on testnet (or regtest) follows **XBT testnet4**, and mainnet follows XBT mainnet. Set `BTCPAY_BTCB2_CHAIN=mainnet` or `testnet4` to override this.
+If the admin allows it, store owners can choose their own sources on their store's XBT page. These must be on the public internet; BTCPay refuses to connect them to private or local addresses.
 
 ### Configuration for operators
 
 | Environment variable | Purpose |
 | --- | --- |
-| `BTCPAY_BTCB2_CHAIN` | `mainnet` or `testnet4` |
+| `BTCPAY_BTCB2_CHAIN` | `mainnet` or `testnet4`, overriding the default that follows BTCPay's network |
 | `BTCPAY_BTCB2_ESPLORA` | Comma-separated chain data sources. Overrides the admin page and locks it. |
 | `BTCPAY_BTCB2_REQUIRED_AGREEMENT` | How many of those sources must agree (default: 2 when several are set, otherwise 1) |
 | `BTCPAY_BTCB2_POLL_SECONDS` | How often pending invoices are checked (default 15) |
@@ -83,16 +120,16 @@ BTCB2_X = BTCB2_USD * BTC_X / BTC_USD;
 BTCB2_USD = btcb2(BTCB2_USD);
 ```
 
-Through the Greenfield API, set a store's wallet with
-`PUT /api/v1/stores/{storeId}/payment-methods/BTCB2-CHAIN` and a body of
+To set a store's wallet through the Greenfield API, call
+`PUT /api/v1/stores/{storeId}/payment-methods/BTCB2-CHAIN` with a body of
 `{"enabled": true, "config": {"walletKey": "<zpub or descriptor>", "confirmationsRequired": 3}}`.
 
 ## Risks to understand
 
 - **Public sources are trusted parties.** They can be wrong, offline or compromised. Requiring agreement between independent operators reduces this risk without removing it. For larger amounts, run your own source.
-- **A payment stops counting only on positive evidence.** Enough sources must answer and no longer report it; a silent source never counts as evidence. Confirmed payments need every answering source to agree they are gone, over several minutes. Payments that arrive after an invoice expires are still recorded for 3 days and marked as paid late.
-- **The chain is young.** Reorganizations are more likely than on Bitcoin. Raise the confirmation count for large payments.
-- **Prices come from thin markets.** The plugin refuses to price when sources look wrong, but check your invoices.
+- **A payment stops counting only on positive evidence.** Enough sources must answer and no longer report it; a silent source never counts as evidence. A confirmed payment needs every answering source to agree it is gone, over several minutes. Payments that arrive after an invoice expires are still recorded for 3 days and marked as paid late.
+- **The chain is young.** Reorganizations are more likely than on Bitcoin, so raise the confirmation count for large payments.
+- **Prices come from thin markets.** The plugin refuses to price when the exchanges look wrong, but check your invoices.
 - **Replay protection is opt-in on XBT.** Customers should pay from an XBT wallet that uses it. The checkout warns them not to send BTC.
 
 ## Development
@@ -100,7 +137,7 @@ Through the Greenfield API, set a store's wallet with
 Everything runs in Docker. The .NET SDK, BTCPay Server and its dependencies all run in containers, and nothing is installed on the host.
 
 ```bash
-git clone --recurse-submodules <this repository>
+git clone --recurse-submodules https://github.com/cwhorton/btcpayserver-blake2b-plugin.git
 ./dev.sh up            # build the plugin and start BTCPay at http://localhost:14142
 ./scripts/dev-seed.sh  # local admin, API key and store (credentials in the gitignored .dev.env)
 ./dev.sh restart       # rebuild the plugin and reload BTCPay
@@ -109,25 +146,14 @@ git clone --recurse-submodules <this repository>
 ./dev.sh down          # stop everything
 ```
 
-BTCPay Server is pinned as a git submodule in `submodules/btcpayserver`.
+BTCPay Server is pinned as a git submodule in `submodules/btcpayserver`. Run `./dev.sh` on its own to list every command.
 
-### Testing payment detection without real coins
+**Testing payment detection without real coins.** `./dev.sh fake-chain` points BTCPay at three fake chain sources (two explorers and an Electrum server), and two of them must agree. Drive them with `scripts/fake-chain.sh` (`pay`, `mine`, `reorg`, `drop`, `fail`), or run the end-to-end scenarios with `python3 scripts/e2e_fake_chain.py`. Then `./dev.sh real-chain` returns to the public testnet4 sources, and `./dev.sh mainnet` follows XBT mainnet.
 
-`./dev.sh fake-chain` points BTCPay at three fake chain sources (two explorers and an Electrum server), and two of them must agree. They poll every 2 seconds. You can drive them with `scripts/fake-chain.sh` (`pay`, `mine`, `reorg`, `drop`, `fail`), or run the end-to-end scenarios:
-
-```bash
-./dev.sh fake-chain
-python3 scripts/e2e_fake_chain.py
-./dev.sh real-chain    # back to the public sources
-```
-
-### Packaging
-
-```bash
-./dev.sh package       # Release .btcpay package in .build/packed, as Plugin Builder makes it
-./dev.sh stock         # the official BTCPay image with only that package installed (http://localhost:14143)
-./scripts/stock-smoke.sh
-```
+**Packaging.**
+- `./dev.sh package` builds the release `.btcpay` file into `.build/packed`.
+- `./dev.sh upload-test` installs that file into the official BTCPay image through its *Upload plugin* form and checks that it loads.
+- `./dev.sh screenshots` retakes the screenshots above.
 
 ## License
 
