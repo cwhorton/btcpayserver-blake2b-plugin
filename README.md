@@ -13,11 +13,11 @@ The plugin installs like any other plugin and **needs no full node**. Payments a
   - By default it uses three independently run public explorers, and two of them must agree before a payment counts.
   - You can use your own explorer or Electrum server instead, or cross-check yours against the public ones.
 - **Protection against the wrong chain.** XBT and Bitcoin addresses are identical, so every source must prove it follows the BLAKE2b chain before it's used. A Bitcoin explorer is rejected, so real BTC is never counted as XBT.
-- **Prices from public exchanges.** NeoxEX (XBT/USDC) and NonKYC (XBT/USDT) are combined and treated as USD.
-  - Thin order books are ignored.
-  - If the two exchanges disagree by more than 5%, no invoice is priced in XBT.
-  - When one exchange is down, the other is used only if its price is within 5% of the last price both agreed on in the past hour.
-  - Other currencies are converted from USD with your store's usual rates.
+- **Prices from public exchanges, with the details shown.** NeoxEX (XBT/USDC) and NonKYC (XBT/USDT) are combined and treated as USD. Both plugin pages show each exchange's live bid and ask, whether it was used and why not, and the resulting price.
+  - Thin order books are ignored, and if the exchanges disagree too much no invoice is priced in XBT. The server admin chooses the exchanges and both limits.
+  - When one exchange is down, the other is used only if its price is close to the last price both agreed on in the past hour.
+  - Each store can add an **XBT price adjustment**, for example +2% to cover price swings, or a negative number for a discount. The store page shows the exact price its invoices will use.
+  - Other currencies are converted from USD with your store's usual rates, and BTCPay's store spread still applies.
 - **Stricter confirmation defaults than Bitcoin.** The chain is young and its hashrate can be rented, so a medium speed policy waits for 3 confirmations. You can change this per store.
 - **A configurable display name**, "XBT" by default.
 
@@ -35,18 +35,22 @@ Not included: Lightning, refunds and payouts, and spending from BTCPay. Send fro
    - Paste your wallet's account public key (zpub, ypub or xpub) or its output descriptor.
    - Click *Preview addresses* and compare the addresses with your wallet's first receive addresses.
    - Confirm both checkboxes and save.
-3. **Optional, choose sources and name:** go to *Server settings → Bitcoin BLAKE2b*. There you can:
-   - choose which chain data sources to use;
-   - test them;
+3. **Optional, choose sources, pricing and name:** go to *Server settings → Bitcoin BLAKE2b*. There you can:
+   - choose which chain data sources to use, and test them;
+   - choose which exchanges price XBT, and their safety limits;
    - change the display name;
    - let store owners use their own sources.
+
+   On the store's *Wallets → XBT* page, set the store's XBT price adjustment.
 4. **Test it:** create a small invoice and pay it from your XBT wallet.
 
 Set your wallet's **gap limit** well above the number of unpaid invoices you expect, for example 100. Otherwise the wallet may not show payments to later addresses. Every invoice uses a new address, including invoices that are never paid.
 
 ### Using your own explorer or Electrum server
 
-Your own source is the most private option: public explorers see which addresses you watch. Enter any of these:
+Your own source is the most private option: public explorers see which addresses you watch.
+
+To use it, go to *Server settings → Bitcoin BLAKE2b → Chain data sources*. Choose **My own sources only**, which turns the public explorers off, or **My own sources, cross-checked with the public explorers**. Then enter your sources, click *Test sources*, and save. Enter any of these:
 
 | Source | Example |
 | --- | --- |

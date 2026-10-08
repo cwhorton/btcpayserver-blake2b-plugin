@@ -8,6 +8,7 @@ using BTCPayServer.Abstractions.Extensions;
 using BTCPayServer.Abstractions.Models;
 using BTCPayServer.Client;
 using BTCPayServer.Plugins.BitcoinBlake2b.Chain;
+using BTCPayServer.Plugins.BitcoinBlake2b.Rates;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -16,7 +17,7 @@ namespace BTCPayServer.Plugins.BitcoinBlake2b.Controllers;
 [Area(Plugin.Area)]
 [Route("server/bitcoin-blake2b")]
 [Authorize(Policy = Policies.CanModifyServerSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
-public class UIBitcoinBlake2bServerController(Btcb2Network network, ChainSources sources) : Controller
+public class UIBitcoinBlake2bServerController(Btcb2Network network, ChainSources sources, Btcb2RateProvider prices) : Controller
 {
     public const string MenuItemId = "BitcoinBlake2b-Server";
     static readonly string[] ReservedNames = ["BTC", "Bitcoin", "XBTC", "SATS"];
@@ -30,7 +31,10 @@ public class UIBitcoinBlake2bServerController(Btcb2Network network, ChainSources
             DisplayName = settings.DisplayName ?? Btcb2.DefaultDisplayName,
             Mode = settings.Mode,
             OwnSources = string.Join("\n", settings.OwnSources),
-            AllowStoreSources = settings.AllowStoreSources
+            AllowStoreSources = settings.AllowStoreSources,
+            EnabledExchanges = prices.Exchanges.Select(e => e.Name).Where(settings.Pricing.IsEnabled).ToArray(),
+            MaxSpreadPercent = settings.Pricing.MaxSpreadPercent,
+            MaxDivergencePercent = settings.Pricing.MaxDivergencePercent
         };
         return View(await Fill(vm));
     }
@@ -44,6 +48,16 @@ public class UIBitcoinBlake2bServerController(Btcb2Network network, ChainSources
             ModelState.AddModelError(nameof(vm.DisplayName), "Use 1 to 20 letters, digits, spaces, dots, dashes or underscores.");
         else if (ReservedNames.Contains(displayName, StringComparer.OrdinalIgnoreCase))
             ModelState.AddModelError(nameof(vm.DisplayName), "This name would make customers think they should pay in Bitcoin (BTC).");
+
+        var exchanges = prices.Exchanges.Select(e => e.Name).ToArray();
+        var enabled = (vm.EnabledExchanges ?? []).Intersect(exchanges).ToArray();
+        if (enabled.Length == 0)
+            ModelState.AddModelError(nameof(vm.EnabledExchanges), "Use at least one exchange, or XBT can't be priced.");
+        foreach (var (field, value) in new[] { (nameof(vm.MaxSpreadPercent), vm.MaxSpreadPercent), (nameof(vm.MaxDivergencePercent), vm.MaxDivergencePercent) })
+        {
+            if (value < Btcb2PricingSettings.MinLimitPercent || value > Btcb2PricingSettings.MaxLimitPercent)
+                ModelState.AddModelError(field, $"Must be between {Btcb2PricingSettings.MinLimitPercent}% and {Btcb2PricingSettings.MaxLimitPercent}%.");
+        }
 
         var own = ChainSources.ParseUrls(vm.OwnSources);
         if (!sources.ConfiguredByEnvironment)
@@ -73,9 +87,16 @@ public class UIBitcoinBlake2bServerController(Btcb2Network network, ChainSources
             DisplayName = displayName,
             Mode = vm.Mode,
             OwnSources = own,
-            AllowStoreSources = vm.AllowStoreSources
+            AllowStoreSources = vm.AllowStoreSources,
+            Pricing = new Btcb2PricingSettings
+            {
+                DisabledExchanges = exchanges.Except(enabled).ToArray(),
+                MaxSpreadPercent = vm.MaxSpreadPercent,
+                MaxDivergencePercent = vm.MaxDivergencePercent
+            }
         });
         await sources.ServerMonitor.RefreshAsync(HttpContext.RequestAborted);
+        await prices.GetSnapshotAsync(HttpContext.RequestAborted, forceRefresh: true);
         TempData.SetStatusMessageModel(new StatusMessageModel
         {
             Severity = sources.ServerMonitor.IsAvailable ? StatusMessageModel.StatusSeverity.Success : StatusMessageModel.StatusSeverity.Warning,
@@ -96,6 +117,8 @@ public class UIBitcoinBlake2bServerController(Btcb2Network network, ChainSources
         vm.PublicRequiredAgreement = network.PublicRequiredAgreement;
         vm.ConfiguredByEnvironment = sources.ConfiguredByEnvironment;
         vm.Current = SourceSetViewModel.From(monitor);
+        vm.Exchanges = prices.Exchanges.Select(e => (e.Name, e.Market)).ToArray();
+        vm.Price = await prices.GetSnapshotAsync(HttpContext.RequestAborted);
         return vm;
     }
 }
@@ -113,4 +136,11 @@ public class Btcb2ServerSettingsViewModel
     public bool ConfiguredByEnvironment { get; set; }
     public SourceSetViewModel? Current { get; set; }
     public SourceSetViewModel? Test { get; set; }
+
+    // Pricing
+    public string[]? EnabledExchanges { get; set; }
+    public decimal MaxSpreadPercent { get; set; } = 5m;
+    public decimal MaxDivergencePercent { get; set; } = 5m;
+    public (string Name, string Market)[] Exchanges { get; set; } = [];
+    public PriceSnapshot? Price { get; set; }
 }

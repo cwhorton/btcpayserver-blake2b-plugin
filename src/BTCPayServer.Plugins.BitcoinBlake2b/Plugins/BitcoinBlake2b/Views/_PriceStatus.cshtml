@@ -1,0 +1,67 @@
+@using BTCPayServer.Plugins.BitcoinBlake2b.Rates
+@using System.Globalization
+@model PriceSnapshot
+@{
+    string Usd(decimal v) => v.ToString("0.00", CultureInfo.InvariantCulture);
+    var age = DateTimeOffset.UtcNow - (Model.RateTime ?? Model.Time);
+    var ageText = age.TotalSeconds < 60 ? $"{(int)age.TotalSeconds} s ago" : $"{(int)age.TotalMinutes} min ago";
+}
+<div class="table-responsive">
+    <table class="table table-hover mb-1" data-testid="BitcoinBlake2b-PriceStatus">
+        <thead>
+            <tr>
+                <th>Exchange</th>
+                <th>Market</th>
+                <th class="text-end">Bid</th>
+                <th class="text-end">Ask</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var q in Model.Quotes)
+            {
+                <tr>
+                    <td><a href="@q.TradeUrl" target="_blank" rel="noreferrer noopener">@q.Exchange</a></td>
+                    <td>@q.Market</td>
+                    <td class="text-end">@(q.Quote is { } a ? Usd(a.Bid) : "")</td>
+                    <td class="text-end">@(q.Quote is { } b ? Usd(b.Ask) : "")</td>
+                    <td>
+                        @if (q.Disabled)
+                        {
+                            <span class="me-1 btcpay-status btcpay-status--pending"></span><span>Turned off</span>
+                        }
+                        else if (q.Used)
+                        {
+                            <span class="me-1 btcpay-status btcpay-status--enabled"></span><span>Used</span>
+                        }
+                        else
+                        {
+                            <span class="me-1 btcpay-status btcpay-status--disabled"></span>
+                            <span>@(q.Quote is null ? "Unavailable" : q.Problem is null ? "Not used" : "Ignored")</span>
+                            @if (q.Problem is not null)
+                            {
+                                <div class="text-secondary small text-break">@q.Problem</div>
+                            }
+                        }
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+<p class="mb-1" data-testid="BitcoinBlake2b-ExchangePrice">
+    @if (Model.Rate is { } rate)
+    {
+        <strong>Exchange price: @Usd((rate.Bid + rate.Ask) / 2m) USD per XBT</strong>
+        <span class="text-secondary">(bid @Usd(rate.Bid), from @Model.Exchanges exchange@(Model.Exchanges == 1 ? "" : "s"), @ageText)</span>
+    }
+    else
+    {
+        <strong class="text-danger">No usable XBT price: new invoices can't offer XBT.</strong>
+    }
+</p>
+@if (Model.Error is not null)
+{
+    <p class="text-warning small mb-1">@Model.Error@(Model.Rate is not null ? $" Using the last good price from {ageText}." : "")</p>
+}
+<p class="form-text mb-0">USDC and USDT are counted as US dollars. Invoices use the bid, the price at which XBT could be sold.</p>

@@ -42,7 +42,12 @@ public class Plugin : BaseBTCPayServerPlugin
         services.AddHttpClient(HttpQuoteSource.HttpClientName);
         services.AddSingleton<IQuoteSource, NeoxExQuoteSource>();
         services.AddSingleton<IQuoteSource, NonKycQuoteSource>();
-        services.AddRateProvider<Btcb2RateProvider>();
+        services.AddSingleton<Btcb2StorePricing>();
+        services.AddSingleton(p => new Btcb2RateProvider(
+            p.GetServices<IQuoteSource>(),
+            () => p.GetRequiredService<ChainSources>().ServerSettings.Pricing,
+            storeId => p.GetRequiredService<Btcb2StorePricing>().GetAsync(storeId)));
+        services.AddSingleton<IRateProvider>(p => p.GetRequiredService<Btcb2RateProvider>());
 
         // Payment method
         // The display name is the admin's choice, loaded at startup (see Btcb2DisplayName.cs).

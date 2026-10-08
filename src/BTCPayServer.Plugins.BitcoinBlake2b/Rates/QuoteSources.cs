@@ -10,6 +10,10 @@ namespace BTCPayServer.Plugins.BitcoinBlake2b.Rates;
 public interface IQuoteSource
 {
     string Name { get; }
+    /// <summary>The market quoted, for display, such as "XBT/USDC".</summary>
+    string Market { get; }
+    /// <summary>The exchange's page for this market.</summary>
+    string TradeUrl { get; }
     Task<ExchangeQuote> GetQuoteAsync(CancellationToken cancellationToken);
 }
 
@@ -19,6 +23,8 @@ public abstract class HttpQuoteSource(IHttpClientFactory httpClientFactory) : IQ
     static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);
 
     public abstract string Name { get; }
+    public abstract string Market { get; }
+    public abstract string TradeUrl { get; }
     protected abstract string Endpoint { get; }
     protected abstract ExchangeQuote Parse(JObject json, DateTimeOffset now);
 
@@ -41,6 +47,8 @@ public class NeoxExQuoteSource(IHttpClientFactory httpClientFactory) : HttpQuote
     static readonly TimeSpan MaxAge = TimeSpan.FromMinutes(5);
 
     public override string Name => "NeoxEX";
+    public override string Market => "XBT/USDC";
+    public override string TradeUrl => "https://neoxa.exchange/trade/BTCB2_USDC";
     protected override string Endpoint => Url;
     protected override ExchangeQuote Parse(JObject json, DateTimeOffset now) => ParseTicker(json, now);
 
@@ -65,6 +73,8 @@ public class NonKycQuoteSource(IHttpClientFactory httpClientFactory) : HttpQuote
     public const string Url = "https://api.nonkyc.io/api/v2/market/getbysymbol/BTCB2_USDT";
 
     public override string Name => "NonKYC";
+    public override string Market => "XBT/USDT";
+    public override string TradeUrl => "https://nonkyc.io/market/BTCB2_USDT";
     protected override string Endpoint => Url;
     protected override ExchangeQuote Parse(JObject json, DateTimeOffset now) => ParseMarket(json);
 

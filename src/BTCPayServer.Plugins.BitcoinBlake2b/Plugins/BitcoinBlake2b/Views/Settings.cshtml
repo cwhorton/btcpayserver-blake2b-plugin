@@ -1,4 +1,5 @@
 @using BTCPayServer.Plugins.BitcoinBlake2b.Chain
+@using BTCPayServer.Plugins.BitcoinBlake2b.Rates
 @model Btcb2WalletViewModel
 @{
     ViewData.SetLayoutModel(new LayoutModel(UIBitcoinBlake2bStoreController.MenuItemId, $"{Model.DisplayName} wallet"));
@@ -121,14 +122,100 @@
     </div>
 </div>
 
+@if (Model.Price is not null)
+{
+    var adjustment = Model.AdjustmentPercent;
+    <div class="row mt-5">
+        <div class="col-xl-8">
+            <h3 class="mb-3" id="pricing">Pricing</h3>
+            <p class="text-secondary">Where this store's @Model.DisplayName price comes from.</p>
+            <partial name="_PriceStatus" model="Model.Price" />
+
+            <div class="mt-4 mb-3" data-testid="BitcoinBlake2b-StorePrice">
+                @if (Model.StoreRate is { } storeRate && storeRate > 0)
+                {
+                    <p class="mb-1">
+                        <strong>This store's price: 1 @Model.DisplayName = @storeRate.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture) @Model.StoreCurrency</strong>
+                        <span class="text-secondary">(what new invoices use)</span>
+                    </p>
+                    <p class="text-secondary mb-0">
+                        A 100 @Model.StoreCurrency invoice costs @((100m / storeRate).ToString("0.00000000", System.Globalization.CultureInfo.InvariantCulture)) @Model.DisplayName.
+                    </p>
+                }
+                else
+                {
+                    <p class="text-danger mb-0"><strong>This store can't price @Model.DisplayName right now, so its invoices won't offer it.</strong></p>
+                }
+                <ul class="text-secondary small mt-2 mb-0">
+                    <li>Exchange price@(Model.StoreCurrency == "USD" ? "" : $", converted to {Model.StoreCurrency} with your store's Bitcoin rates")</li>
+                    <li>Your @Model.DisplayName adjustment below: @(adjustment == 0 ? "none" : $"{(adjustment > 0 ? "+" : "")}{adjustment}%")</li>
+                    <li>
+                        Your store's spread: @Model.StoreSpreadPercent% (applies to all currencies, set in
+                        <a asp-area="" asp-controller="UIStores" asp-action="Rates" asp-route-storeId="@storeId">Settings → Rates</a>)
+                    </li>
+                </ul>
+                @if (Model.UsesRateScript && !Model.RateScriptPricesXbt)
+                {
+                    <div class="alert alert-warning mt-3 mb-0" role="alert">
+                        Your store uses a custom rate script without @Btcb2.CryptoCode rules, so @Model.DisplayName can't be priced.
+                        Add these lines to it in <a asp-area="" asp-controller="UIStores" asp-action="Rates" asp-route-storeId="@storeId">Settings → Rates</a>:
+                        <pre class="mb-0 mt-2">@string.Join("\n", Btcb2.DefaultRateRules)</pre>
+                    </div>
+                }
+                else if (Model.UsesRateScript)
+                {
+                    <p class="form-text mb-0">Your store's custom rate script decides the @Model.DisplayName price: @Model.StoreRateRule</p>
+                }
+            </div>
+
+            <form method="post" asp-action="UpdatePricing" asp-route-storeId="@storeId">
+                <div class="form-group">
+                    <label class="form-label" for="adjustmentPercent">@Model.DisplayName price adjustment</label>
+                    <div class="input-group w-auto">
+                        <input type="number" class="form-control" id="adjustmentPercent" name="adjustmentPercent" step="0.1"
+                               min="@Btcb2StorePricingSettings.MinAdjustmentPercent" max="@Btcb2StorePricingSettings.MaxAdjustmentPercent"
+                               value="@adjustment.ToString(System.Globalization.CultureInfo.InvariantCulture)" />
+                        <span class="input-group-text">%</span>
+                    </div>
+                    <div class="form-text">
+                        How much more customers pay when they pay in @Model.DisplayName, for example to cover price swings before you sell it.
+                        2 means a 100 @Model.StoreCurrency invoice costs 102 @Model.StoreCurrency worth of @Model.DisplayName. A negative number gives a discount.
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-primary" id="SavePricing">Save adjustment</button>
+            </form>
+            @if (User.IsInRole(Roles.ServerAdmin))
+            {
+                <p class="form-text mt-3 mb-0">
+                    Choose the exchanges and their safety limits in
+                    <a asp-area="@Plugin.Area" asp-controller="UIBitcoinBlake2bServer" asp-action="ServerSettings" asp-fragment="pricing">server settings</a>.
+                </p>
+            }
+        </div>
+    </div>
+}
+
 @if (Model.Sources is not null)
 {
     <div class="row mt-5">
         <div class="col-xl-8">
             <h3 class="mb-3">Chain data sources</h3>
             <p class="text-secondary">The servers BTCPay asks about this store's @Model.DisplayName payments.</p>
+            @if (User.IsInRole(Roles.ServerAdmin))
+            {
+                <p class="text-secondary">
+                    To use your own explorer or Electrum server instead of the public explorers, go to
+                    <a asp-area="@Plugin.Area" asp-controller="UIBitcoinBlake2bServer" asp-action="ServerSettings">server settings</a>
+                    and choose <em>My own sources only</em>.
+                </p>
+            }
+            else if (!Model.CanChooseSources)
+            {
+                <p class="text-secondary">This server's admin chooses these sources.</p>
+            }
             @if (Model.CanChooseSources)
             {
+                <p class="text-secondary">Your own sources must be reachable on the public internet.</p>
                 <form method="post" asp-action="UpdateSources" asp-route-storeId="@storeId" class="mb-4">
                     <div class="form-check mb-2">
                         <input class="form-check-input" type="radio" name="sourceMode" value="@ChainSourceMode.Public" id="StoreModePublic" checked="@(Model.SourceMode == ChainSourceMode.Public)" />

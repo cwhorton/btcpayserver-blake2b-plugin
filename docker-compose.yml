@@ -53,6 +53,8 @@ services:
       BTCPAY_BTCB2_ESPLORA: ${BTCB2_ESPLORA:-}
       BTCPAY_BTCB2_REQUIRED_AGREEMENT: ${BTCB2_REQUIRED_AGREEMENT:-}
       BTCPAY_BTCB2_POLL_SECONDS: ${BTCB2_POLL_SECONDS:-}
+      # Set by ./dev.sh mainnet: follow XBT mainnet while BTC stays on regtest.
+      BTCPAY_BTCB2_CHAIN: ${BTCB2_CHAIN:-}
     volumes:
       - .:/src
       - nuget:/root/.nuget/packages

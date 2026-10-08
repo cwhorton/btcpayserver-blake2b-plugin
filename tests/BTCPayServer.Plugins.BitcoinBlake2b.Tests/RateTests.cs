@@ -1,5 +1,6 @@
 using BTCPayServer.Plugins.BitcoinBlake2b.Rates;
 using BTCPayServer.Rating;
+using BTCPayServer.Services.Rates;
 using Newtonsoft.Json.Linq;
 
 namespace BTCPayServer.Plugins.BitcoinBlake2b.Tests;
@@ -111,20 +112,73 @@ public class RateTests
     public async Task ProviderReturnsUsdRateAndToleratesOneFailingSourceAfterAgreement()
     {
         var b = new FakeSource("B", new("B", 700m, 710m));
-        var provider = new Btcb2RateProvider([new FakeSource("A", new("A", 690m, 700m)), b]);
+        var provider = Provider(new FakeSource("A", new("A", 690m, 700m)), b);
         var rate = Assert.Single(await provider.GetRatesAsync(CancellationToken.None));
         Assert.Equal("BTCB2_USD", rate.CurrencyPair.ToString());
         Assert.Equal(695m, rate.BidAsk.Bid);
 
         // B goes down: A alone is accepted because it is close to the price both agreed on.
         b.Quote = null;
+        await provider.GetSnapshotAsync(CancellationToken.None, forceRefresh: true);
         Assert.Equal(690m, Assert.Single(await provider.GetRatesAsync(CancellationToken.None)).BidAsk.Bid);
 
         // A fresh provider with one source down has nothing to check it against.
-        var fresh = new Btcb2RateProvider([new FakeSource("A", new("A", 690m, 700m)), new FakeSource("B", null)]);
+        var fresh = Provider(new FakeSource("A", new("A", 690m, 700m)), new FakeSource("B", null));
         await Assert.ThrowsAsync<QuoteUnavailableException>(() => fresh.GetRatesAsync(CancellationToken.None));
-        var allDown = new Btcb2RateProvider([new FakeSource("A", null), new FakeSource("B", null)]);
+        var allDown = Provider(new FakeSource("A", null), new FakeSource("B", null));
         await Assert.ThrowsAsync<QuoteUnavailableException>(() => allDown.GetRatesAsync(CancellationToken.None));
+    }
+
+    static Btcb2RateProvider Provider(params IQuoteSource[] sources) => Provider(new Btcb2PricingSettings(), 0m, sources);
+
+    static Btcb2RateProvider Provider(Btcb2PricingSettings pricing, decimal storeAdjustment, params IQuoteSource[] sources) =>
+        new(sources, () => pricing, _ => Task.FromResult(new Btcb2StorePricingSettings { AdjustmentPercent = storeAdjustment }));
+
+    [Fact]
+    public async Task SnapshotExplainsEachExchange()
+    {
+        var provider = Provider(new FakeSource("A", new("A", 690m, 700m)), new FakeSource("B", new("B", 500m, 700m)), new FakeSource("C", null));
+        var snapshot = await provider.GetSnapshotAsync(CancellationToken.None);
+        // B is too thin and C unreachable; A alone has no reference, so there is no price.
+        Assert.Null(snapshot.Rate);
+        Assert.NotNull(snapshot.Error);
+        Assert.Contains("spread", snapshot.Quotes.Single(q => q.Exchange == "B").Problem);
+        Assert.Equal("unreachable", snapshot.Quotes.Single(q => q.Exchange == "C").Problem);
+        Assert.All(snapshot.Quotes, q => Assert.False(q.Used));
+    }
+
+    [Fact]
+    public async Task AdminCanTurnExchangesOffAndTrustTheOneLeft()
+    {
+        var pricing = new Btcb2PricingSettings { DisabledExchanges = ["B"] };
+        var provider = Provider(pricing, 0m, new FakeSource("A", new("A", 690m, 700m)), new FakeSource("B", new("B", 900m, 910m)));
+        var snapshot = await provider.GetSnapshotAsync(CancellationToken.None);
+        Assert.Equal(690m, snapshot.Rate!.Bid);
+        Assert.True(snapshot.Quotes.Single(q => q.Exchange == "B").Disabled);
+        Assert.True(snapshot.Quotes.Single(q => q.Exchange == "A").Used);
+    }
+
+    [Fact]
+    public async Task AdminLimitsAreApplied()
+    {
+        // 4% apart: fine with the default 5% limit, refused with a 3% limit.
+        IQuoteSource[] quotes = [new FakeSource("A", new("A", 700m, 700m)), new FakeSource("B", new("B", 728m, 728m))];
+        Assert.NotNull((await Provider(quotes).GetSnapshotAsync(CancellationToken.None)).Rate);
+        var strict = Provider(new Btcb2PricingSettings { MaxDivergencePercent = 3m }, 0m, quotes);
+        Assert.Null((await strict.GetSnapshotAsync(CancellationToken.None)).Rate);
+    }
+
+    [Theory]
+    [InlineData(0, 700)]
+    [InlineData(2, 686.27)]   // 700 / 1.02: a 100 USD invoice costs 102 USD worth of XBT
+    [InlineData(-5, 736.84)]  // 700 / 0.95: a discount
+    public async Task StoreAdjustmentChangesWhatCustomersPay(decimal adjustment, decimal expectedRate)
+    {
+        var provider = Provider(new Btcb2PricingSettings(), adjustment, new FakeSource("A", new("A", 700m, 700m)), new FakeSource("B", new("B", 700m, 700m)));
+        var forStore = await provider.GetRatesAsync(new StoreIdRateContext("store"), CancellationToken.None);
+        Assert.Equal(expectedRate, Math.Round(Assert.Single(forStore).BidAsk.Bid, 2));
+        // Without a store, the plain exchange price.
+        Assert.Equal(700m, Assert.Single(await provider.GetRatesAsync(CancellationToken.None)).BidAsk.Bid);
     }
 
     [Theory]
@@ -150,6 +204,8 @@ public class RateTests
     {
         public ExchangeQuote? Quote { get; set; } = quote;
         public string Name => name;
+        public string Market => $"XBT/{name}";
+        public string TradeUrl => "https://example.com";
         public Task<ExchangeQuote> GetQuoteAsync(CancellationToken cancellationToken) =>
             Quote is null ? throw new HttpRequestException("unreachable") : Task.FromResult(Quote);
     }

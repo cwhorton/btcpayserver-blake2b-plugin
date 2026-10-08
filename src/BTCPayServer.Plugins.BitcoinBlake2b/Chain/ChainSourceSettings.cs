@@ -27,6 +27,8 @@ public class Btcb2ServerSettings
     /// to whatever they enter, which on a shared server could reach its internal network.
     /// </summary>
     public bool AllowStoreSources { get; set; }
+
+    public Rates.Btcb2PricingSettings Pricing { get; set; } = new();
 }
 
 /// <summary>A store's own chain data sources, used only if the server admin allows it.</summary>

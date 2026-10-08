@@ -11,7 +11,8 @@
 #   ./dev.sh fake-chain   Restart BTCPay against 3 fake chain sources (explorers a and b, Electrum
 #                         server c; 2 must agree); drive them
 #                         with scripts/fake-chain.sh
-#   ./dev.sh real-chain   Restart BTCPay against the real public explorers
+#   ./dev.sh real-chain   Restart BTCPay against the real public explorers (XBT testnet4)
+#   ./dev.sh mainnet      Restart BTCPay against XBT mainnet (real coins; BTC stays on regtest)
 #   ./dev.sh package      Build the Release .btcpay package into .build/packed (what Plugin Builder makes)
 #   ./dev.sh stock        Run the official BTCPay image (no source changes) at http://localhost:14143
 #                         with only the packaged plugin installed
@@ -60,6 +61,12 @@ case "${1:-}" in
     docker compose --profile fake-chain stop fake-esplora-a fake-esplora-b fake-esplora-c
     docker compose up -d --force-recreate btcpay
     ;;
+  mainnet)
+    build_plugin
+    docker compose --profile fake-chain stop fake-esplora-a fake-esplora-b fake-esplora-c
+    BTCB2_CHAIN=mainnet docker compose up -d --force-recreate btcpay
+    echo "BTCPay now follows XBT MAINNET: invoices take real XBT"
+    ;;
   package)
     sdk bash -c "rm -rf .build/publish .build/packed && \
       dotnet publish src/$PROJECT/$PROJECT.csproj -c Release -o .build/publish -m:2 && \
@@ -79,7 +86,7 @@ case "${1:-}" in
     sdk "$@"
     ;;
   *)
-    sed -n '2,18p' "$0"
+    sed -n '2,19p' "$0"
     exit 1
     ;;
 esac

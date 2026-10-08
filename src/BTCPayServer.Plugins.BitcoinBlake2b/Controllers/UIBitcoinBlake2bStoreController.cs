@@ -8,6 +8,9 @@ using BTCPayServer.Client;
 using BTCPayServer.Data;
 using BTCPayServer.Plugins.BitcoinBlake2b.Chain;
 using BTCPayServer.Plugins.BitcoinBlake2b.Payments;
+using BTCPayServer.Plugins.BitcoinBlake2b.Rates;
+using BTCPayServer.Rating;
+using BTCPayServer.Services.Rates;
 using BTCPayServer.Plugins.BitcoinBlake2b.Wallet;
 using BTCPayServer.Services.Stores;
 using Microsoft.AspNetCore.Authorization;
@@ -23,6 +26,10 @@ public class UIBitcoinBlake2bStoreController(
     Btcb2PaymentHandler handler,
     AddressAllocator allocator,
     ChainSources sources,
+    Btcb2RateProvider prices,
+    Btcb2StorePricing storePricing,
+    RateFetcher rateFetcher,
+    DefaultRulesCollection defaultRules,
     StoreRepository storeRepository) : Controller
 {
     public const string MenuItemId = "BitcoinBlake2b-Wallet";
@@ -112,6 +119,50 @@ public class UIBitcoinBlake2bStoreController(
             await monitor.RefreshAsync(HttpContext.RequestAborted);
         vm.Sources = SourceSetViewModel.From(monitor);
         vm.CanChooseSources = sources.ServerSettings.AllowStoreSources && !sources.ConfiguredByEnvironment;
+        await FillPricing(vm);
+    }
+
+    /// <summary>The store's XBT price exactly as its invoices would get it, with how it is made up.</summary>
+    async Task FillPricing(Btcb2WalletViewModel vm)
+    {
+        var store = Store;
+        var blob = store.GetStoreBlob();
+        vm.Price = await prices.GetSnapshotAsync(HttpContext.RequestAborted);
+        vm.AdjustmentPercent = (await storePricing.GetAsync(store.Id)).AdjustmentPercent;
+        vm.StoreCurrency = blob.DefaultCurrency;
+        vm.StoreSpreadPercent = blob.Spread * 100m;
+        var rateSettings = blob.GetRateSettings(false);
+        vm.UsesRateScript = rateSettings?.RateScripting is true;
+        vm.RateScriptPricesXbt = vm.UsesRateScript && (rateSettings?.RateScript ?? "").Contains(Btcb2.CryptoCode, StringComparison.OrdinalIgnoreCase);
+        var pair = new CurrencyPair(Btcb2.CryptoCode, blob.DefaultCurrency);
+        var result = await rateFetcher.FetchRates([pair], blob.GetRateRules(defaultRules), new StoreIdRateContext(store.Id), HttpContext.RequestAborted)[pair];
+        vm.StoreRate = result.BidAsk?.Bid;
+        vm.StoreRateRule = result.EvaluatedRule;
+    }
+
+    [HttpPost("pricing")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> UpdatePricing(decimal adjustmentPercent)
+    {
+        var store = Store;
+        if (adjustmentPercent < Btcb2StorePricingSettings.MinAdjustmentPercent || adjustmentPercent > Btcb2StorePricingSettings.MaxAdjustmentPercent)
+        {
+            TempData.SetStatusMessageModel(new StatusMessageModel
+            {
+                Severity = StatusMessageModel.StatusSeverity.Error,
+                Message = $"The adjustment must be between {Btcb2StorePricingSettings.MinAdjustmentPercent}% and {Btcb2StorePricingSettings.MaxAdjustmentPercent}%."
+            });
+            return RedirectToAction(nameof(Settings), new { storeId = store.Id });
+        }
+        await storePricing.SaveAsync(store.Id, new Btcb2StorePricingSettings { AdjustmentPercent = adjustmentPercent });
+        TempData.SetStatusMessageModel(new StatusMessageModel
+        {
+            Severity = StatusMessageModel.StatusSeverity.Success,
+            Message = adjustmentPercent == 0
+                ? $"{network.DisplayName} invoices now use the exchange price. This applies to new invoices."
+                : $"{network.DisplayName} payers now pay {Math.Abs(adjustmentPercent)}% {(adjustmentPercent > 0 ? "more" : "less")} than the exchange price. This applies to new invoices."
+        });
+        return RedirectToAction(nameof(Settings), new { storeId = store.Id });
     }
 
     [HttpPost("preview")]
@@ -245,6 +296,16 @@ public class Btcb2WalletViewModel
     public bool CanChooseSources { get; set; }
     public ChainSourceMode SourceMode { get; set; }
     public string? OwnSources { get; set; }
+
+    // Pricing
+    public PriceSnapshot? Price { get; set; }
+    public decimal AdjustmentPercent { get; set; }
+    public string StoreCurrency { get; set; } = "USD";
+    public decimal StoreSpreadPercent { get; set; }
+    public bool UsesRateScript { get; set; }
+    public bool RateScriptPricesXbt { get; set; }
+    public decimal? StoreRate { get; set; }
+    public string? StoreRateRule { get; set; }
 
     // Setting up a wallet
     public string? WalletKey { get; set; }
