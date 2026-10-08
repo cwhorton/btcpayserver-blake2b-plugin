@@ -24,12 +24,26 @@
     </div>
 </template>
 
+@if (Network.Chain == Btcb2Chain.Mainnet)
+{
+    @* BTCPay's developer cheat mode (a regtest server only) can't fake or mine real XBT, so its
+       test panel is hidden while mainnet XBT is the selected payment method. *@
+    <style>body.btcb2-mainnet-selected #checkout-cheating { display: none !important; }</style>
+}
+
 <script>
     Vue.component(@Safe.Json(Btcb2CheckoutModelExtension.CheckoutBodyComponentName), {
         props: ['model'],
         template: @Safe.Json("#" + Btcb2CheckoutModelExtension.CheckoutBodyComponentName),
         components: {
             qrcode: VueQrcode
+        },
+        mounted () {
+            if (@Safe.Json(Network.Chain == Btcb2Chain.Mainnet))
+                document.body.classList.add('btcb2-mainnet-selected');
+        },
+        beforeDestroy () {
+            document.body.classList.remove('btcb2-mainnet-selected');
         }
     });
 </script>
